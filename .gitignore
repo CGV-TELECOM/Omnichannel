@@ -1,0 +1,5 @@
+.env
+echo "Miniconda3-latest-Linux-x86_64.sh" >> .gitignoreMiniconda3-latest-Linux-x86_64.sh
+Miniconda3-latest-Linux-x86_64.sh*
+*.pyc
+__pycache__/

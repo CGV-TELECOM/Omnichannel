@@ -1,0 +1,5 @@
+Tạo bảng từ động từ models: dùng lệnh: alembic init alembic
+alembic revision --autogenerate -m "Create table" Tạo migration
+alembic upgrade head Chạy migration
+alembic revision --autogenerate -- update db
+uvicorn main:app --reload

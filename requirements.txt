@@ -1,0 +1,99 @@
+# ===================================================
+# FastAPI Contact Center - Complete Dependencies
+# ===================================================
+
+# ---------------------------------------------------
+# Core Framework
+# ---------------------------------------------------
+fastapi[all]==0.115.0                  # Web framework với tất cả extensions
+uvicorn[standard]==0.29.0              # ASGI server với performance extras
+pydantic==2.5.3                        # Data validation (included in fastapi[all] nhưng explicit tốt hơn)
+pydantic-settings==2.1.0               # Settings management
+
+# ---------------------------------------------------
+# Database & ORM
+# ---------------------------------------------------
+sqlalchemy[asyncio]==2.0.28            # ORM với async support
+asyncpg==0.29.0                        # PostgreSQL async driver
+alembic==1.13.1                        # Database migrations
+psycopg2-binary==2.9.9                 # PostgreSQL adapter (for alembic sync operations)
+
+# ---------------------------------------------------
+# Authentication & Security
+# ---------------------------------------------------
+python-jose[cryptography]==3.3.0       # JWT token creation/validation
+passlib[bcrypt]==1.7.4                 # Password hashing
+bcrypt==3.2.2                          # Bcrypt algorithm (explicit for passlib)
+cryptography==42.0.0                   # Crypto operations
+
+# ---------------------------------------------------
+# UUID & Time
+# ---------------------------------------------------
+uuid6==2023.5.2                        # UUID v7 support
+pytz==2025.2                           # Timezone handling
+
+# ---------------------------------------------------
+# Environment & Config
+# ---------------------------------------------------
+python-dotenv==1.0.1                   # Load .env files
+
+# ---------------------------------------------------
+# Redis (Caching & Session)
+# ---------------------------------------------------
+redis[asyncio]==5.2.1                  # Redis client với async support
+hiredis==2.3.2                         # Redis performance boost (optional but recommended)
+
+# ---------------------------------------------------
+# WebSocket & Real-time
+# ---------------------------------------------------
+python-socketio==5.11.1                # Socket.IO server
+python-engineio==4.9.0                 # Engine.IO protocol (dependency của socketio)
+websockets==12.0                       # WebSocket protocol support
+
+# ---------------------------------------------------
+# Email
+# ---------------------------------------------------
+aiosmtplib==3.0.2                      # Async SMTP client
+email-validator==2.1.1                 # Email validation
+jinja2==3.1.3                          # Template engine (email templates)
+
+# ---------------------------------------------------
+# HTTP & API
+# ---------------------------------------------------
+httpx==0.27.0                          # Async HTTP client (for external API calls)
+requests==2.31.0                       # Sync HTTP client (fallback)
+python-multipart==0.0.9                # Form data & file uploads
+
+# ---------------------------------------------------
+# Monitoring & Logging (Optional but Recommended)
+# ---------------------------------------------------
+# prometheus-fastapi-instrumentator==6.1.0  # Metrics & monitoring
+# sentry-sdk[fastapi]==1.40.0               # Error tracking
+
+# ---------------------------------------------------
+# Data Processing (Optional - Uncomment if needed)
+# ---------------------------------------------------
+# orjson==3.9.15                       # Fast JSON serialization (optimization)
+# python-dateutil==2.8.2               # Advanced date parsing
+
+# ---------------------------------------------------
+# Testing (Development) - Uncomment when needed
+# ---------------------------------------------------
+# pytest==7.4.4                        # Testing framework (compatible with pytest-asyncio)
+# pytest-asyncio==0.23.6               # Async test support
+# pytest-cov==4.1.0                    # Coverage reports
+# Note: httpx already included above for production use
+
+# ---------------------------------------------------
+# Code Quality (Development)
+# ---------------------------------------------------
+# black==24.1.0                        # Code formatter
+# flake8==7.0.0                        # Linter
+# mypy==1.8.0                          # Type checker
+
+# ===================================================
+# Notes:
+# - All production dependencies are uncommented
+# - Testing/dev dependencies are commented (uncomment if needed)
+# - Monitoring tools are commented (add when needed)
+# ===================================================
