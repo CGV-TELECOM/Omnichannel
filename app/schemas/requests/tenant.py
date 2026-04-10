@@ -1,10 +1,30 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Any, Optional
 from uuid import UUID  
 
 class GroupBase(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    meta_data: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Dữ liệu mở rộng (JSON) để cấu hình đồng bộ Chatwoot Account (map theo tenant).\n\n"
+            "Toàn bộ key/value trong `meta_data` có thể được dùng để build payload gọi Chatwoot Platform API "
+            "`/platform/api/v1/accounts` (ví dụ: `locale`, `domain`, `support_email`, `features`, `limits`, "
+            "`custom_attributes`, ...).\n\n"
+            "- `features` sẽ được sanitize theo whitelist để tránh Chatwoot 500/duplicate account.\n"
+            "- Tương thích ngược: nếu có `meta_data.chatwoot_account` (dict) thì ưu tiên dùng phần đó."
+        ),
+        json_schema_extra={
+            "example": {
+                "locale": "vi",
+                "support_email": "support@example.com",
+                "domain": "example.com",
+                "features": {"inbound_emails": True, "reports": True},
+                "custom_attributes": {"plan": "pro"},
+            }
+        },
+    )
 
 class TenantCreate(GroupBase):
     pass

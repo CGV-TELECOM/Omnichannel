@@ -21,7 +21,7 @@ async def getAllTenant(
     id: Optional[UUID] = Query(None, description="ID của tenant"),
     page_size: int = Query(10, ge=1, le=100, description="Số bản ghi mỗi trang"),
     search: Optional[str] = Query(None, description="Từ khóa tìm kiếm"),
-    _ = Depends(has_permission("view_roles")),
+    _ = Depends(has_permission("view_tenants")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency)
 ): 
@@ -32,7 +32,7 @@ async def getAllTenant(
 async def createTenant(
     request: Request,
     tenant_data : TenantCreate,
-    _ = Depends(has_permission("view_roles")),
+    _ = Depends(has_permission("create_tenant")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency)
 ):
@@ -45,7 +45,7 @@ async def updateTenant(
     tenant_id: UUID,
     request: Request,
     tenant_data : TenantUpdate,
-    _ = Depends(has_permission("view_roles")),
+    _ = Depends(has_permission("edit_tenant")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency)
 ):
@@ -57,7 +57,7 @@ async def updateTenant(
 async def deleteTenant(
     tenant_id: UUID,
     request: Request,
-    _ = Depends(has_permission("view_roles")),
+    _ = Depends(has_permission("delete_tenant")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency)
 ):

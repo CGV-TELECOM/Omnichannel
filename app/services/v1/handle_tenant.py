@@ -1,13 +1,56 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
-from app.db.models import Tenant, User
+from app.db.models import (
+    Tenant,
+    User,
+    ChatwootLegacyMap,
+    ChatwootMapResourceType,
+)
 from app.schemas.requests.tenant import TenantCreate, TenantResponse, TenantUpdate 
 from sqlalchemy import select, func,  or_
-from uuid import UUID  
+from uuid import UUID
 from sqlalchemy.future import select
 from fastapi import Request
 from app.utils.helpers import isCheckMaxLevel
 from sqlalchemy.exc import SQLAlchemyError
+from datetime import datetime, timezone
+from typing import Any
+
+from app.integrations.chatwoot import client as chatwoot_client
+from app.integrations.chatwoot.account_payload import sanitize_platform_account_payload
+
+
+async def _get_tenant_account_map(
+    db: AsyncSession, tenant_id: UUID
+) -> ChatwootLegacyMap | None:
+    q = await db.execute(
+        select(ChatwootLegacyMap).where(
+            ChatwootLegacyMap.resource_type == ChatwootMapResourceType.ACCOUNT,
+            ChatwootLegacyMap.local_uuid == tenant_id,
+        )
+    )
+    return q.scalar_one_or_none()
+
+
+def _tenant_chatwoot_account_payload(tenant: Tenant) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Merge meta_data (root + chatwoot_account lồng) với name tenant; sanitize Platform API."""
+    md = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+    flat_nested: dict[str, Any] = {}
+    cw = md.get("chatwoot_account")
+    if isinstance(cw, dict):
+        flat_nested = dict(cw)
+    root_flat: dict[str, Any] = {}
+    for k, v in md.items():
+        if k == "chatwoot_account":
+            continue
+        if v is not None:
+            root_flat[k] = v
+    # Root meta_data ghi đè nested chatwoot_account (cùng key).
+    extra = {**flat_nested, **root_flat}
+    extra.pop("name", None)
+    raw: dict[str, Any] = {"name": tenant.name, **extra}
+    raw.pop("chatwoot_account", None)
+    return sanitize_platform_account_payload(raw)
 
 
 async def getAllTenant(_: Request, current_user: User, id: UUID | None, page: int, page_size: int, search: str | None, db: AsyncSession):
@@ -35,7 +78,8 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, page: in
                     id=result_tenant.id,
                     name=result_tenant.name,
                     description=result_tenant.description,
-                    is_active=result_tenant.is_active
+                    is_active=result_tenant.is_active,
+                    meta_data=result_tenant.meta_data,
                 )
             )
         else:
@@ -64,7 +108,8 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, page: in
                     id=t.id,
                     name=t.name,
                     description=t.description,
-                    is_active=t.is_active
+                    is_active=t.is_active,
+                    meta_data=t.meta_data,
                 )
                 for t in tenants
             ]
@@ -122,9 +167,58 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
         # Tạo tenant mới
         new_tenant = Tenant(
             name=tenant_data.name,
-            description=tenant_data.description
+            description=tenant_data.description,
+            meta_data=tenant_data.meta_data,
         )
         db.add(new_tenant)
+        await db.flush()
+
+        chatwoot_payload, _ = _tenant_chatwoot_account_payload(new_tenant)
+        cw_res = await chatwoot_client.platform_request(
+            "POST",
+            "/platform/api/v1/accounts",
+            json_body=chatwoot_payload,
+        )
+        if (
+            cw_res.status_code not in (200, 201)
+            or not isinstance(cw_res.data, dict)
+            or cw_res.data.get("id") is None
+        ):
+            await db.rollback()
+            return api_response(
+                ResponseStatus.ERROR,
+                cw_res.status_code if cw_res.status_code in (401, 404, 422, 503) else 502,
+                "Tạo account Chatwoot thất bại, đã rollback tạo tenant",
+                {
+                    "chatwoot_status_code": cw_res.status_code,
+                    "chatwoot_response": cw_res.data,
+                },
+            )
+        try:
+            chatwoot_account_id = int(cw_res.data["id"])
+        except (TypeError, ValueError):
+            await db.rollback()
+            return api_response(
+                ResponseStatus.ERROR,
+                502,
+                "Chatwoot trả id account không hợp lệ, đã rollback tạo tenant",
+                {"chatwoot_response": cw_res.data},
+            )
+
+        db.add(
+            ChatwootLegacyMap(
+                resource_type=ChatwootMapResourceType.ACCOUNT,
+                local_uuid=new_tenant.id,
+                chatwoot_id=chatwoot_account_id,
+                tenant_id=new_tenant.id,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+
+        if not isinstance(new_tenant.meta_data, dict):
+            new_tenant.meta_data = {}
+        new_tenant.meta_data["chatwoot_account"] = dict(chatwoot_payload)
+
         await db.commit()
         await db.refresh(new_tenant)
 
@@ -132,7 +226,10 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             ResponseStatus.SUCCESS, 
             ResponseStatusCode.CREATED, 
             "Thêm tenant thành công",
-            data=new_tenant
+            data={
+                "tenant": TenantResponse.model_validate(new_tenant),
+                "chatwoot_linked": True,
+            }
         )
 
     except Exception as e:
@@ -187,8 +284,74 @@ async def updateTenant(
             )
         
         # 4. Cập nhật dữ liệu
-        for field, value in tenant_data.dict(exclude_unset=True).items():
+        for field, value in tenant_data.model_dump(exclude_unset=True).items():
             setattr(tenant, field, value)
+
+        account_map = await _get_tenant_account_map(db, tenant.id)
+        if account_map:
+            cw_body, _ = _tenant_chatwoot_account_payload(tenant)
+            cw_res = await chatwoot_client.platform_request(
+                "PATCH",
+                f"/platform/api/v1/accounts/{account_map.chatwoot_id}",
+                json_body=cw_body,
+            )
+            if cw_res.status_code != 200:
+                await db.rollback()
+                return api_response(
+                    ResponseStatus.ERROR,
+                    cw_res.status_code if cw_res.status_code in (401, 404, 422, 503) else 502,
+                    "Cập nhật account Chatwoot thất bại",
+                    {
+                        "chatwoot_status_code": cw_res.status_code,
+                        "chatwoot_response": cw_res.data,
+                    },
+                )
+        else:
+            cw_create_body, _ = _tenant_chatwoot_account_payload(tenant)
+            cw_create = await chatwoot_client.platform_request(
+                "POST",
+                "/platform/api/v1/accounts",
+                json_body=cw_create_body,
+            )
+            if (
+                cw_create.status_code not in (200, 201)
+                or not isinstance(cw_create.data, dict)
+                or cw_create.data.get("id") is None
+            ):
+                await db.rollback()
+                return api_response(
+                    ResponseStatus.ERROR,
+                    cw_create.status_code if cw_create.status_code in (401, 404, 422, 503) else 502,
+                    "Tenant chưa có map và tạo account Chatwoot mới thất bại",
+                    {
+                        "chatwoot_status_code": cw_create.status_code,
+                        "chatwoot_response": cw_create.data,
+                    },
+                )
+            try:
+                new_account_id = int(cw_create.data["id"])
+            except (TypeError, ValueError):
+                await db.rollback()
+                return api_response(
+                    ResponseStatus.ERROR,
+                    502,
+                    "Chatwoot trả id account không hợp lệ",
+                    {"chatwoot_response": cw_create.data},
+                )
+            db.add(
+                ChatwootLegacyMap(
+                    resource_type=ChatwootMapResourceType.ACCOUNT,
+                    local_uuid=tenant.id,
+                    chatwoot_id=new_account_id,
+                    tenant_id=tenant.id,
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+
+        if not isinstance(tenant.meta_data, dict):
+            tenant.meta_data = {}
+        snap, _ = _tenant_chatwoot_account_payload(tenant)
+        tenant.meta_data["chatwoot_account"] = dict(snap)
 
         await db.commit()
         await db.refresh(tenant)
@@ -201,8 +364,9 @@ async def updateTenant(
                 id=tenant.id,
                 name=tenant.name,
                 description=tenant.description,
-                is_active=tenant.is_active
-            )
+                is_active=tenant.is_active,
+                meta_data=tenant.meta_data,
+            ),
         )
 
     except SQLAlchemyError as e:
@@ -247,6 +411,24 @@ async def deleteTenant(tenant_id: UUID, current_user: User, request, db: AsyncSe
                 ResponseStatusCode.BAD_REQUEST, 
                 "Không tìm thấy tenant, vui lòng kiểm tra lại"
             )
+
+        account_map = await _get_tenant_account_map(db, result_tenant.id)
+        if account_map:
+            cw_res = await chatwoot_client.platform_request(
+                "DELETE",
+                f"/platform/api/v1/accounts/{account_map.chatwoot_id}",
+            )
+            if cw_res.status_code not in (200, 204, 404):
+                return api_response(
+                    ResponseStatus.ERROR,
+                    cw_res.status_code if cw_res.status_code in (401, 404, 422, 503) else 502,
+                    "Xóa account Chatwoot thất bại",
+                    {
+                        "chatwoot_status_code": cw_res.status_code,
+                        "chatwoot_response": cw_res.data,
+                    },
+                )
+            await db.delete(account_map)
 
         # Đánh dấu xóa mềm
         result_tenant.is_active = 0

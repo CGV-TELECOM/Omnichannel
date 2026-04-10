@@ -79,6 +79,37 @@ def _platform_account_payload_update(body: ChatwootUpdateAccountBody) -> dict[st
     return body.model_dump(mode="json", exclude_unset=True, exclude_none=True)
 
 
+def _merge_chatwoot_platform_user_payload(
+    meta_data: dict[str, Any] | None,
+    core: dict[str, Any],
+) -> dict[str, Any]:
+    """Gộp meta_data (root + chatwoot_user lồng) rồi merge với core.
+
+    - Root meta_data ghi đè nested `chatwoot_user` (cùng key), tránh snapshot cũ đè mất giá trị root.
+    - **core** (body API / default) ghi đè meta cùng key — request body là nguồn rõ ràng nhất.
+    - Không gửi key `chatwoot_user` lên Platform API.
+    """
+    extras: dict[str, Any] = {}
+    if isinstance(meta_data, dict):
+        flat_nested: dict[str, Any] = {}
+        nested = meta_data.get("chatwoot_user")
+        if isinstance(nested, dict):
+            for k, v in nested.items():
+                if v is not None:
+                    flat_nested[k] = v
+        root_flat: dict[str, Any] = {}
+        for k, v in meta_data.items():
+            if k == "chatwoot_user":
+                continue
+            if v is not None:
+                root_flat[k] = v
+        extras = {**flat_nested, **root_flat}
+    merged = {**extras, **core}
+    out = {k: v for k, v in merged.items() if v is not None}
+    out.pop("chatwoot_user", None)
+    return out
+
+
 def _application_agent_payload(body: ChatwootAgentCreateBody | ChatwootAgentUpdateBody) -> dict[str, object]:
     return body.model_dump(mode="json", exclude_unset=True, exclude_none=True)
 
@@ -386,19 +417,23 @@ async def provision_account(
         tenant_q = await db.execute(select(Tenant).where(Tenant.id == body.tenant_id))
         tenant = tenant_q.scalar_one_or_none()
         if not tenant:
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.BAD_REQUEST,
-                "Tenant không tồn tại",
+            # Đồng bộ ngược: tạo tenant nội bộ trước khi provision Chatwoot account.
+            tenant = Tenant(
+                id=body.tenant_id,
+                name=body.name,
+                description=getattr(body, "description", None),
+                is_active=1,
             )
+            db.add(tenant)
+            await db.flush()
 
         exists = await _get_tenant_account_mapping(db, body.tenant_id)
         if exists:
             return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.CONFLICT,
-                "Tenant đã được map với Chatwoot account",
-                {"chatwoot_account_id": exists.chatwoot_id},
+                ResponseStatus.SUCCESS,
+                ResponseStatusCode.OK,
+                "Tenant đã được liên kết với Chatwoot account (bỏ qua tạo mới)",
+                {"tenant_id": str(body.tenant_id), "chatwoot_linked": True},
             )
 
         payload = _platform_account_payload_provision(body)
@@ -441,14 +476,17 @@ async def provision_account(
             created_at=datetime.now(timezone.utc),
         )
         db.add(row)
+        if not isinstance(tenant.meta_data, dict):
+            tenant.meta_data = {}
+        prev = tenant.meta_data.get("chatwoot_account") if isinstance(tenant.meta_data, dict) else None
+        base = dict(prev) if isinstance(prev, dict) else {}
+        tenant.meta_data["chatwoot_account"] = {**base, **dict(payload)}
         await db.commit()
         await db.refresh(row)
 
         success_data: dict[str, Any] = {
             "tenant_id": str(body.tenant_id),
-            "chatwoot_account": data,
-            "mapping_id": row.id,
-            "integration_account_user": link_info,
+            "chatwoot_linked": True,
         }
         if sanitize_meta:
             success_data["payload_sanitize_meta"] = sanitize_meta
@@ -648,6 +686,16 @@ async def update_account(
         )
         data = res.data
         if res.status_code == 200:
+            tenant_q = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+            tenant = tenant_q.scalar_one_or_none()
+            if tenant:
+                if not isinstance(tenant.meta_data, dict):
+                    tenant.meta_data = {}
+                current_meta = tenant.meta_data.get("chatwoot_account")
+                if not isinstance(current_meta, dict):
+                    current_meta = {}
+                tenant.meta_data["chatwoot_account"] = {**current_meta, **dict(payload)}
+                await db.commit()
             ok_data: dict[str, Any] = {
                 "tenant_id": str(tenant_id),
                 "chatwoot_account": data,
@@ -688,6 +736,7 @@ async def update_account(
 async def create_user(
     request: Request,
     current_user: User,
+    user_id: UUID,
     body: ChatwootUserCreateBody,
     db: AsyncSession,
 ):
@@ -699,7 +748,7 @@ async def create_user(
                 "Chỉ quản trị viên mới thực hiện được thao tác này",
             )
 
-        local_q = await db.execute(select(User).where(User.id == body.local_user_id))
+        local_q = await db.execute(select(User).where(User.id == user_id))
         local_user = local_q.scalar_one_or_none()
         if not local_user:
             return api_response(
@@ -708,7 +757,7 @@ async def create_user(
                 "User nội bộ không tồn tại",
             )
 
-        exists = await _map_user_by_local(db, body.local_user_id)
+        exists = await _map_user_by_local(db, user_id)
         if exists:
             return api_response(
                 ResponseStatus.ERROR,
@@ -717,19 +766,22 @@ async def create_user(
                 {"chatwoot_user_id": exists.chatwoot_id},
             )
 
-        payload = body.model_dump(
-            mode="json",
-            exclude={"local_user_id"},
-            exclude_none=True,
+        core: dict[str, Any] = dict(
+            body.model_dump(mode="json", exclude_none=True),
         )
-        if "name" not in payload:
-            payload["name"] = local_user.fullname or local_user.username
-        if "display_name" not in payload and local_user.fullname:
-            payload["display_name"] = local_user.fullname
-        if "email" not in payload and local_user.email:
-            payload["email"] = local_user.email
+        if "name" not in core or core.get("name") is None:
+            core["name"] = local_user.fullname or local_user.username
+        if "display_name" not in core and local_user.fullname:
+            core["display_name"] = local_user.fullname
+        if ("email" not in core or core.get("email") is None) and local_user.email:
+            core["email"] = local_user.email
 
-        if not payload.get("name") or not payload.get("email"):
+        merged = _merge_chatwoot_platform_user_payload(
+            local_user.meta_data if isinstance(local_user.meta_data, dict) else None,
+            core,
+        )
+
+        if not merged.get("name") or not merged.get("email"):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.BAD_REQUEST,
@@ -739,7 +791,7 @@ async def create_user(
         res = await chatwoot_client.platform_request(
             "POST",
             "/platform/api/v1/users",
-            json_body=payload,
+            json_body=merged,
         )
         data = res.data
         if res.status_code in (200, 201) and isinstance(data, dict) and data.get("id") is not None:
@@ -751,10 +803,17 @@ async def create_user(
                     502,
                     "Chatwoot trả user không có id hợp lệ",
                     _chatwoot_error_payload(
-                        res, sent_payload_keys=sorted(payload.keys(), key=str)
+                        res, sent_payload_keys=sorted(merged.keys(), key=str)
                     ),
                 )
-            m = await _ensure_user_map(db, body.local_user_id, cw_id)
+            m = await _ensure_user_map(db, user_id, cw_id)
+            if not isinstance(local_user.meta_data, dict):
+                local_user.meta_data = {}
+            else:
+                local_user.meta_data = dict(local_user.meta_data)
+            local_user.meta_data["chatwoot_user"] = {
+                k: v for k, v in merged.items() if k != "password"
+            }
             await db.commit()
             return api_response(
                 ResponseStatus.SUCCESS,
@@ -766,7 +825,7 @@ async def create_user(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 409, 422, 503) else 502,
             "Tạo user trên Chatwoot thất bại",
-            _chatwoot_error_payload(res, sent_payload_keys=sorted(payload.keys(), key=str)),
+            _chatwoot_error_payload(res, sent_payload_keys=sorted(merged.keys(), key=str)),
         )
     except SQLAlchemyError as e:
         await db.rollback()
@@ -856,6 +915,8 @@ async def update_user(
                 ResponseStatusCode.NOT_FOUND,
                 "Không có map user Chatwoot cho UUID này",
             )
+        local_u = await db.execute(select(User).where(User.id == user_id))
+        local_user = local_u.scalar_one_or_none()
         payload = body.model_dump(mode="json", exclude_unset=True, exclude_none=True)
         if not payload:
             return api_response(
@@ -863,12 +924,26 @@ async def update_user(
                 ResponseStatusCode.BAD_REQUEST,
                 "Không có trường nào để cập nhật",
             )
+        merged = _merge_chatwoot_platform_user_payload(
+            local_user.meta_data if local_user and isinstance(local_user.meta_data, dict) else None,
+            payload,
+        )
         res = await chatwoot_client.platform_request(
             "PATCH",
             f"/platform/api/v1/users/{m.chatwoot_id}",
-            json_body=payload,
+            json_body=merged,
         )
         if res.status_code == 200 and isinstance(res.data, dict):
+            if local_user:
+                if not isinstance(local_user.meta_data, dict):
+                    local_user.meta_data = {}
+                else:
+                    local_user.meta_data = dict(local_user.meta_data)
+                cur = local_user.meta_data.get("chatwoot_user")
+                cur_d = dict(cur) if isinstance(cur, dict) else {}
+                snap = {**cur_d, **{k: v for k, v in merged.items() if k != "password"}}
+                local_user.meta_data["chatwoot_user"] = snap
+                await db.commit()
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
@@ -879,7 +954,7 @@ async def update_user(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 422, 503) else 502,
             "Cập nhật user trên Chatwoot thất bại",
-            _chatwoot_error_payload(res, sent_payload_keys=sorted(payload.keys(), key=str)),
+            _chatwoot_error_payload(res, sent_payload_keys=sorted(merged.keys(), key=str)),
         )
     except SQLAlchemyError as e:
         return api_response(

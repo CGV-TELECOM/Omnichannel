@@ -180,11 +180,10 @@ class ChatwootAgentBotRecord(BaseModel):
 
 
 class ChatwootUserCreateBody(BaseModel):
-    """POST /platform/api/v1/users — tạo user Chatwoot và map với local user."""
+    """Body POST /chatwoot/users/{user_id} — tạo user Platform Chatwoot và map với user nội bộ (user_id trên path)."""
 
     model_config = ConfigDict(extra="allow")
 
-    local_user_id: UUID = Field(description="UUID user trên contact-center để lưu map")
     name: str | None = Field(default=None, description="Full name")
     display_name: str | None = Field(default=None, description="Display name")
     email: str | None = Field(default=None, description="Email")

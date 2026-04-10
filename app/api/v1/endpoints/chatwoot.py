@@ -74,16 +74,17 @@ async def delete_chatwoot_account(
     return await handle_chatwoot.delete_account(request, current_user, tenant_id, db)
 
 
-@router.post("/users")
+@router.post("/users/{user_id}")
 @log_user_action("chatwootCreateUser")
 async def create_chatwoot_user(
     request: Request,
+    user_id: UUID,
     body: ChatwootUserCreateBody,
     _=Depends(has_permission("view_roles")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    return await handle_chatwoot.create_user(request, current_user, body, db)
+    return await handle_chatwoot.create_user(request, current_user, user_id, body, db)
 
 
 @router.get("/users/{user_id}")

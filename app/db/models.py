@@ -57,7 +57,8 @@ class User(Base):
     webphone_agent_id = Column(String(50))
     call_recording_enabled = Column(Boolean, default=True)
     call_log_enabled = Column(Boolean, default=True)
-    
+    meta_data = Column(JSONB, nullable=True)
+
     # Relationships
     logs = relationship("Log", back_populates="user")
     refresh_tokens = relationship("RefreshToken", back_populates="user")

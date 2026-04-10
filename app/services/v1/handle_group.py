@@ -217,7 +217,8 @@ async def get_group_by_id(group_id: UUID, db: AsyncSession, current_user: User):
             {
                 "id": user.id,
                 "fullname": user.fullname,
-                "email": user.email
+                "email": user.email,
+                "meta_data": user.meta_data,
             }
             for _, _, user in rows if user is not None
         ]
@@ -594,6 +595,7 @@ async def get_group_detail(group_id: UUID, db: AsyncSession, current_user: User)
                         "username": user.username,
                         "email": user.email,
                         "full_name": user.fullname,
+                        "meta_data": user.meta_data,
                     }
                     for user in users
                 ]
@@ -624,6 +626,7 @@ async def get_group_detail(group_id: UUID, db: AsyncSession, current_user: User)
                         "username": user.username,
                         "email": user.email,
                         "full_name": user.fullname,
+                        "meta_data": user.meta_data,
                     }
                     for user in users
                 ]

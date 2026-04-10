@@ -91,6 +91,18 @@ async def soft_delete_user(
     return await handle_user.soft_delete_user(user_id, db, current_user)
 
 
+@router.post("/{user_id}/sync-chatwoot-agent")
+@log_user_action("sync_chatwoot_agent")
+async def sync_user_to_chatwoot_agent(
+    user_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _ = Depends(has_permission("edit_users")),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    return await handle_user.sync_user_to_chatwoot_agent(user_id, db, current_user)
+
+
 # @router.get("/{user_id}/groups")
 # async def get_user_groups(
 #     user_id: int,

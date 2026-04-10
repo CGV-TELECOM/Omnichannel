@@ -98,13 +98,20 @@ async def seed_rbac(db: AsyncSession):
         "create_customer",
         "edit_customer",
         "delete_customer",
+        # Tenant permissions
+        "view_tenants",
+        "create_tenant",
+        "edit_tenant",
+        "delete_tenant",
+        
 
     ]
     permissions = []
     for name in permission_names:
         stmt = select(Permission).filter_by(name=name)
         result = await db.execute(stmt)
-        permission = result.scalar_one_or_none()
+        # Dữ liệu cũ có thể đã bị trùng name, không dùng scalar_one_or_none để tránh crash startup.
+        permission = result.scalars().first()
         if not permission:
             permission = Permission(
                 name=name, 
@@ -205,6 +212,7 @@ async def seed_rbac(db: AsyncSession):
         "view_customer_by_id",
         "create_customer",
         "edit_customer",
+        "view_tenants",
     ]
     user_permissions_objects = [p for p in permissions if p.name in user_permissions]
     await _assign_permissions_to_role(db, user_role, user_permissions_objects)
