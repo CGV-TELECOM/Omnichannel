@@ -15,7 +15,7 @@ https://developers.chatwoot.com/api-reference/agentbots/list-all-agentbots
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ChatwootProvisionAccountBody(BaseModel):
@@ -205,3 +205,73 @@ class ChatwootUserUpdateBody(BaseModel):
     custom_attributes: dict[str, Any] | None = Field(
         default=None, description="Custom attributes"
     )
+
+
+class ChatwootConversationAssignBody(BaseModel):
+    """
+    POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments
+    ([Assign Conversation](https://developers.chatwoot.com/api-reference/conversation-assignments/assign-conversation)).
+
+    - Gửi **assignee_agent_uuid** để gán agent (UUID nội bộ đã map với Chatwoot agent id).
+    - Hoặc gửi **team_id** (id số trên Chatwoot). Nếu có cả hai, Chatwoot ưu tiên assignee.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    assignee_agent_uuid: UUID | None = Field(
+        default=None,
+        description="UUID agent trong contact-center (bảng map); không gửi id số Chatwoot.",
+    )
+    team_id: int | None = Field(
+        default=None,
+        description="Id team trên Chatwoot (Application API dùng số).",
+    )
+
+    @model_validator(mode="after")
+    def _require_assignee_or_team(self):
+        if self.assignee_agent_uuid is None and self.team_id is None:
+            raise ValueError("Cần assignee_agent_uuid hoặc team_id")
+        return self
+
+
+class ChatwootApplicationJsonBody(BaseModel):
+    """Forward nguyên JSON body sang Chatwoot Application API (extra fields giữ nguyên key)."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ChatwootConversationToggleStatusBody(BaseModel):
+    """POST .../conversations/{id}/toggle_status — theo application_swagger.json."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["open", "resolved", "pending", "snoozed"]
+    snoozed_until: int | float | None = Field(
+        default=None,
+        description="Unix timestamp (giây) khi snooze; chỉ dùng khi status=snoozed.",
+    )
+
+
+class ChatwootConversationLabelsMutationBody(BaseModel):
+    """POST .../conversations/{id}/labels — ghi đè danh sách label."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    labels: list[str]
+
+
+class ChatwootConversationTypingBody(BaseModel):
+    """POST .../conversations/{id}/toggle_typing_status."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    typing_status: Literal["on", "off"]
+    is_private: bool | None = None
+
+
+class ChatwootConversationCustomAttributesBody(BaseModel):
+    """POST .../conversations/{id}/custom_attributes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    custom_attributes: dict[str, Any]

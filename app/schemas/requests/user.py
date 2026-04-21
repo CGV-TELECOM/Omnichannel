@@ -63,7 +63,7 @@ class UpdateUserRequest(BaseModel):
                 "custom_attributes": {"region": "HN"},
                 "chatwoot_agent": {"availability_status": "busy"},
             }
-        },
+        },  
     )
 
 class ResponseUser(BaseModel):

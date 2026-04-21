@@ -37,6 +37,7 @@ async def _request(
     path: str,
     token: str | None,
     json_body: dict[str, Any] | None = None,
+    params: dict[str, Any] | list[tuple[str, Any]] | None = None,
 ) -> ChatwootResult:
     if not token:
         return ChatwootResult(
@@ -46,14 +47,17 @@ async def _request(
             path,
         )
     headers = {
-        # "api_access_token": token,
         "api-access-token": token,
-        "Content-Type": "application/json",
+        "api_access_token": token,
         "Accept": "application/json",
     }
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
     try:
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            r = await client.request(method, url, headers=headers, json=json_body)
+            r = await client.request(
+                method, url, headers=headers, json=json_body, params=params
+            )
     except UnicodeEncodeError as exc:
         return ChatwootResult(
             500,
@@ -95,9 +99,12 @@ async def platform_request(
     path: str,
     *,
     json_body: dict[str, Any] | None = None,
+    params: dict[str, Any] | list[tuple[str, Any]] | None = None,
 ) -> ChatwootResult:
     base = _base_url()
     token = settings.CHATWOOT_PLATFORM_API_TOKEN
+
+    print(f"Check token: {token}")
     if not base:
         return ChatwootResult(
             503, {"description": "CHATWOOT_BASE_URL chưa cấu hình"}, "", ""
@@ -109,6 +116,7 @@ async def platform_request(
         path=path_norm,
         token=token,
         json_body=json_body,
+        params=params,
     )
 
 
@@ -117,6 +125,7 @@ async def application_request(
     path: str,
     *,
     json_body: dict[str, Any] | None = None,
+    params: dict[str, Any] | list[tuple[str, Any]] | None = None,
 ) -> ChatwootResult:
     base = _base_url()
     token = settings.CHATWOOT_USER_API_TOKEN
@@ -131,4 +140,5 @@ async def application_request(
         path=path_norm,
         token=token,
         json_body=json_body,
+        params=params,
     )

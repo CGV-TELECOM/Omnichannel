@@ -60,13 +60,10 @@ def create_refresh_token(data: dict):
 def verify_token(request: Request):
     """
     Xác thực JWT token từ Authorization header
-    
     Args:
         request (Request): FastAPI request object
-        
     Returns:
         str: user_id từ token nếu xác thực thành công
-        
     Raises:
         HTTPException: Với các trường hợp lỗi khác nhau
     """

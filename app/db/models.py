@@ -452,7 +452,7 @@ class ChatwootMapResourceType(str, enum.Enum):
 
 class ChatwootLegacyMap(Base):
     """
-    Map UUID nội bộ ↔ id số trên Chatwoot.
+    Map UUID nội bộ và id số trên Chatwoot.
     `resource_type`: account | user | agent | agent_bot.
     Cột `tenant_id` (khi có) phục vụ unique theo tenant, không thay thế vai trò phân loại của `resource_type`.
     """
