@@ -125,11 +125,10 @@ def websocket_status():
 # Mount Socket.IO app
 app.mount("/socket.io", socket_manager.socket_app)
 
-
-# @app.on_event("startup")
-# async def on_startup():
-#     async with async_session_maker() as session:
-#         await seed_rbac(session)
+#@app.on_event("startup")
+#async def on_startup():
+#    async with async_session_maker() as session:
+#        await seed_rbac(session)
 
 if __name__ == "__main__":
     import uvicorn

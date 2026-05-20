@@ -72,7 +72,6 @@ async def update_tenant_inbox(
         request, current_user, tenant_id, inbox_id, body, db
     )
 
-
 @router.get("/tenants/{tenant_id}/teams")
 async def list_tenant_teams(
     request: Request,
@@ -312,4 +311,17 @@ async def assign_tenant_conversation(
 ):
     return await handle_chatwoot.assign_conversation(
         current_user, tenant_id, conversation_id, body, db
+    )
+
+@router.get("/tenants/{tenant_id}/conversations/{conversation_id}/attachments")
+async def list_tenant_conversation_attachments(
+    request: Request,
+    tenant_id: UUID,
+    conversation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """GET .../attachments."""
+    return await handle_chatwoot.get_attachment(
+        request, current_user, tenant_id, conversation_id, db
     )

@@ -7,6 +7,7 @@ from app.services.v1.handle_chatwoot.account import (
     provision_account,
     sync_integration_account_user,
     update_account,
+    bulk_action_account
 )
 from app.services.v1.handle_chatwoot.agent_bots import (
     create_account_agent_bot,
@@ -49,6 +50,7 @@ from app.services.v1.handle_chatwoot.conversations import (
     update_conversation,
     update_conversation_custom_attributes,
     update_inbox,
+    get_attachment
 )
 from app.services.v1.handle_chatwoot.users import (
     create_user,
@@ -106,4 +108,6 @@ __all__ = [
     "update_conversation_custom_attributes",
     "update_inbox",
     "update_user",
+    "get_attachment",
+    "bulk_action_account",
 ]

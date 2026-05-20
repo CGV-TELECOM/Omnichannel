@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import ChatwootLegacyMap, ChatwootMapResourceType, Tenant, User
 from app.integrations.chatwoot import client as chatwoot_client
 from app.integrations.chatwoot.account_payload import sanitize_platform_account_payload
-from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody
+from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody, ChatwootBulkActionLabelsBody
 from app.schemas.responses.api_response_rule import (
     ResponseStatus,
     ResponseStatusCode,
@@ -432,3 +432,86 @@ async def delete_account(
             f"Lỗi không xác định: {e}",
         )
 
+async def bulk_action_account(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    body: ChatwootBulkActionLabelsBody,
+    db: AsyncSession,
+):
+    """
+    Forward bulk actions sang Chatwoot.
+
+    Payload ví dụ:
+    {
+        "type": "Conversation",
+        "ids": [35],
+        "labels": {
+            "remove": ["test"]
+        }
+    }
+    """
+    try: 
+        if not await isCheckMaxLevel(current_user, db):
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Chỉ quản trị viên mới thực hiện được thao tác này",
+            )
+
+        account_id, _ = await _resolve_account_id(db, tenant_id)
+        
+        if account_id is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Chưa có map Chatwoot account cho tenant này",
+            )
+        
+        payload = body.model_dump(exclude_none=True)
+
+        pairs = _forward_all_query_pairs(request)
+
+        res = await chatwoot_client.application_request(
+            "POST",
+            f"/api/v1/accounts/{account_id}/bulk_actions",
+            json_body=payload,
+            params=pairs or None,
+        )
+
+        data = res.data
+        if res.status_code in (200, 201):
+            return api_response(
+                ResponseStatus.SUCCESS,
+                ResponseStatusCode.OK,
+                "Bulk action Chatwoot thành công",
+                {
+                    "tenant_id": str(tenant_id),
+                    "chatwoot_account_id": account_id,
+                    "result": data,
+                },
+            )
+
+        return api_response(
+            ResponseStatus.ERROR,
+            res.status_code if res.status_code in (401, 404, 503) else 502,
+            "Bulk action Chatwoot thất bại",
+            _chatwoot_error_payload(
+                res,
+                sent_payload_keys=sorted(payload.keys(), key=str)
+            ),
+        )
+    except SQLAlchemyError as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi CSDL: {e}",
+        )
+    except Exception as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi không xác định: {e}",
+        )

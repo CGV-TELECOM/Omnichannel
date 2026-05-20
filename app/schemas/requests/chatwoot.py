@@ -275,3 +275,9 @@ class ChatwootConversationCustomAttributesBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     custom_attributes: dict[str, Any]
+
+class ChatwootBulkActionLabelsBody(BaseModel):
+    """POST .../conversations/bulk_action_labels — thêm hoặc xóa label cho nhiều conversation."""
+    type: Literal["Conversation"]
+    ids: list[int]
+    labels: dict[str, list[str]]

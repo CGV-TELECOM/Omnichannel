@@ -8,7 +8,7 @@ from app.core.config.logging import log_user_action
 from app.core.dependencies.dependencies import get_current_user_dependency
 from app.core.security.permissions import has_permission
 from app.db.models import User
-from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody
+from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody, ChatwootBulkActionLabelsBody
 from app.services.v1 import handle_chatwoot
 
 router = APIRouter()
@@ -75,4 +75,18 @@ async def sync_chatwoot_integration_account_user(
 ):
     return await handle_chatwoot.sync_integration_account_user(
         request, current_user, tenant_id, db
+    )
+
+@router.post("/accounts/{tenant_id}/bulk_actions") 
+@log_user_action("chatwootBulkActionLabels")
+async def bulk_action_labels(
+    request: Request,
+    tenant_id: UUID,
+    body: ChatwootBulkActionLabelsBody,
+    _=Depends(has_permission("view_roles")),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    return await handle_chatwoot.bulk_action_account(
+        request, current_user, tenant_id, body, db
     )

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, List, Tuple
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import Request
+from fastapi import Request, UploadFile
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+
 
 from app.db.models import User
 from app.integrations.chatwoot import client as chatwoot_client
@@ -489,6 +490,8 @@ async def create_conversation_message(
     )
 
 
+
+
 async def delete_conversation_message(
     request: Request,
     current_user: User,
@@ -717,4 +720,25 @@ async def update_conversation_custom_attributes(
         extra_response={"conversation_id": conversation_id},
         error_message="Cập nhật custom_attributes conversation thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+    )
+
+async def get_attachment(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    conversation_id: int,
+    db: AsyncSession,
+):
+    """GET .../conversations/{conversation_id}/messages/{message_id}/attachments/{attachment_id}."""
+    return await _tenant_application_forward(
+        current_user,
+        tenant_id,
+        db,
+        request=request,
+        method="GET",
+        path_suffix=f"/conversations/{conversation_id}/attachments",
+        forward_all_query_params=True,
+        redact_agents=False,
+        ok_message="Chi tiết attachment Chatwoot",
+        error_message="Không lấy được attachment từ Chatwoot",
     )
