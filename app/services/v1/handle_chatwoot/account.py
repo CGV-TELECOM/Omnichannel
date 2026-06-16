@@ -103,6 +103,47 @@ async def provision_account(
         chat_id = int(data["id"])
         link_info = await link_integration_user_to_chatwoot_account(chat_id)
 
+        # Tự động đăng ký webhook của Backend lên Chatwoot nếu cấu hình PUBLIC_BACKEND_URL
+        from app.core.config.app_config import settings
+        import logging
+        logger = logging.getLogger(__name__)
+        if settings.PUBLIC_BACKEND_URL:
+            webhook_url = f"{settings.PUBLIC_BACKEND_URL.rstrip('/')}/api/v1/chatwoot-webhooks"
+            try:
+                webhook_res = await chatwoot_client.application_request(
+                    "POST",
+                    f"/api/v1/accounts/{chat_id}/webhooks",
+                    json_body={
+                        "url": webhook_url,
+                        "subscriptions": [
+                            "message_created",
+                            "message_updated",
+                            "conversation_created",
+                            "conversation_updated",
+                            "conversation_status_changed",
+                        ],
+                    },
+                )
+                if webhook_res.status_code in (200, 201):
+                    logger.info(
+                        "Đã đăng ký webhook Chatwoot tự động thành công cho account %s: %s",
+                        chat_id,
+                        webhook_url,
+                    )
+                else:
+                    logger.warning(
+                        "Đăng ký webhook Chatwoot tự động thất bại cho account %s. Status: %s. Response: %s",
+                        chat_id,
+                        webhook_res.status_code,
+                        webhook_res.raw_text,
+                    )
+            except Exception as e:
+                logger.error(
+                    "Lỗi khi tự động đăng ký webhook Chatwoot cho account %s: %s",
+                    chat_id,
+                    str(e),
+                )
+
         row = ChatwootLegacyMap(
             resource_type=ChatwootMapResourceType.ACCOUNT,
             local_uuid=body.tenant_id,

@@ -37,6 +37,7 @@ from app.services.v1.handle_chatwoot.conversations import (
     delete_label,
     delete_conversation_message,
     get_conversation,
+    filter_conversations,
     get_conversation_labels,
     get_inbox,
     list_labels,
@@ -50,7 +51,8 @@ from app.services.v1.handle_chatwoot.conversations import (
     update_conversation,
     update_conversation_custom_attributes,
     update_inbox,
-    get_attachment
+    get_attachment,
+    update_last_seen
 )
 from app.services.v1.handle_chatwoot.users import (
     create_user,
@@ -59,8 +61,13 @@ from app.services.v1.handle_chatwoot.users import (
     get_user_sso_link,
     update_user,
 )
+from app.services.v1.handle_chatwoot.webhook import (
+    handle_webhook,
+)
 
 __all__ = [
+    "handle_webhook",
+
     "assign_conversation",
     "create_agent",
     "create_account_agent_bot",
@@ -82,6 +89,7 @@ __all__ = [
     "get_agent_bot",
     "get_conversation",
     "get_conversation_labels",
+    "filter_conversations",
     "get_inbox",
     "get_user",
     "get_user_sso_link",
@@ -110,4 +118,5 @@ __all__ = [
     "update_user",
     "get_attachment",
     "bulk_action_account",
+    "update_last_seen"
 ]

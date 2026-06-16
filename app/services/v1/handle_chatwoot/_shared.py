@@ -314,7 +314,7 @@ def _walk_redact_agent_refs(
                 d[k] = _redact_chatwoot_agent_like_user(v, cw_to_local)
             elif (
                 k == "sender"
-                and obj.get("sender_type") == "agent"
+                and str(obj.get("sender_type")).lower() in ("agent", "user")
                 and isinstance(v, dict)
             ):
                 d[k] = _redact_chatwoot_agent_like_user(v, cw_to_local)

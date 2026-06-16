@@ -12,7 +12,7 @@ https://github.com/chatwoot/chatwoot/blob/develop/swagger/tag_groups/application
 https://developers.chatwoot.com/api-reference/agentbots/list-all-agentbots
 """
 
-from typing import Any, Literal
+from typing import Any, Literal, List, Union
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -281,3 +281,15 @@ class ChatwootBulkActionLabelsBody(BaseModel):
     type: Literal["Conversation"]
     ids: list[int]
     labels: dict[str, list[str]]
+
+class ConversationFilter(BaseModel):
+    """Shape filter conversation khi gọi GET /api/v1/accounts/{account_id}/conversations."""
+    attribute_key: str
+    attribute_model: str | None = None
+    filter_operator: str
+    values: List[Union[str, int]]
+    query_operator: str | None = None
+    custom_attribute_type: str | None = None
+
+class ConversationFilterRequest(BaseModel):
+    payload: List[ConversationFilter]

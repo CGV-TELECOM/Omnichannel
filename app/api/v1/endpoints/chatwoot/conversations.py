@@ -15,6 +15,8 @@ from app.schemas.requests.chatwoot import (
     ChatwootConversationLabelsMutationBody,
     ChatwootConversationToggleStatusBody,
     ChatwootConversationTypingBody,
+    ConversationFilter,
+    ConversationFilterRequest,
 )
 from app.services.v1 import handle_chatwoot
 
@@ -130,6 +132,22 @@ async def list_tenant_conversations(
     """GET /api/v1/accounts/{account_id}/conversations — query whitelist trong handler."""
     return await handle_chatwoot.list_conversations(
         request, current_user, tenant_id, db
+    )
+
+@router.post("/tenants/{tenant_id}/conversations/filter")
+async def filter_tenant_conversations(
+    request: Request,
+    tenant_id: UUID,
+    body: ConversationFilterRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    return await handle_chatwoot.filter_conversations(
+        request,
+        current_user,
+        tenant_id,
+        body,
+        db,
     )
 
 
@@ -324,4 +342,21 @@ async def list_tenant_conversation_attachments(
     """GET .../attachments."""
     return await handle_chatwoot.get_attachment(
         request, current_user, tenant_id, conversation_id, db
+    )
+
+@router.post("/tenants/{tenant_id}/conversations/{conversation_id}/update_last_seen")
+async def update_tenant_conversation_last_seen(
+    request: Request,
+    tenant_id: UUID,
+    conversation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """POST .../update_last_seen."""
+    return await handle_chatwoot.update_last_seen(
+        request,
+        current_user,
+        tenant_id,
+        conversation_id,
+        db,
     )

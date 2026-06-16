@@ -34,6 +34,7 @@ from app.api.v1.endpoints.ticket_flow_instance import router as router_ticket_fl
 from app.api.v1.endpoints.ticket_flow_step import router as router_ticket_flow_step
 from app.api.v1.endpoints.customer import router as router_customer
 from app.api.v1.endpoints.chatwoot import router as router_chatwoot
+from app.api.v1.endpoints.chatwoot.webhook import router as router_chatwoot_webhook
 # WebSocket & Notifications
 from app.core.socket.manager import socket_manager
 from app.api.v1.endpoints.notification import router as router_notification
@@ -50,6 +51,7 @@ app = FastAPI()
 
 app.include_router(router_auth, prefix="/api/v1", tags=["Auth"])
 app.include_router(router_test_email, prefix="/api/v1", tags=["Test"])
+app.include_router(router_chatwoot_webhook, prefix="/api/v1")
 protected_routers = [
     router_user,
     router_role_permission,

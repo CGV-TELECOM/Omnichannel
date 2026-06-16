@@ -71,5 +71,7 @@ class Settings:
     CHATWOOT_INTEGRATION_USER_ID: int | None = _optional_positive_int_env(
         "CHATWOOT_INTEGRATION_USER_ID"
     )
+    PUBLIC_BACKEND_URL: str | None = os.getenv("PUBLIC_BACKEND_URL")
+
 
 settings = Settings()

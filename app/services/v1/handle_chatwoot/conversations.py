@@ -18,6 +18,8 @@ from app.schemas.requests.chatwoot import (
     ChatwootConversationLabelsMutationBody,
     ChatwootConversationToggleStatusBody,
     ChatwootConversationTypingBody,
+    ConversationFilter,
+    ConversationFilterRequest,
 )
 from app.schemas.responses.api_response_rule import (
     ResponseStatus,
@@ -95,6 +97,71 @@ async def list_conversations(
             f"Lỗi không xác định: {e}",
         )
 
+
+async def filter_conversations(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    body: ConversationFilterRequest,
+    db: AsyncSession,
+):
+    """
+    POST /api/v1/accounts/{account_id}/conversations/filter
+    """
+    try:
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
+
+        account_id, _ = await _resolve_account_id(db, tenant_id)
+        if account_id is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Chưa có map Chatwoot account cho tenant này",
+            )
+
+        res = await chatwoot_client.application_request(
+            "POST",
+            f"/api/v1/accounts/{account_id}/conversations/filter",
+            params=_forward_all_query_pairs(request) or None,
+            json_body=body.model_dump(exclude_none=True),
+        )
+
+        cw_map = await _chatwoot_agent_id_to_local_map(db, tenant_id)
+
+        if res.status_code == 200:
+            data = _walk_redact_agent_refs(res.data, cw_map)
+
+            return api_response(
+                ResponseStatus.SUCCESS,
+                ResponseStatusCode.OK,
+                "Lọc danh sách conversation thành công",
+                {
+                    "tenant_id": str(tenant_id),
+                    "chatwoot": data,
+                },
+            )
+
+        return api_response(
+            ResponseStatus.ERROR,
+            res.status_code if res.status_code in (400, 401, 403, 404, 503) else 502,
+            "Không lọc được danh sách conversation từ Chatwoot",
+            _chatwoot_error_payload(res),
+        )
+
+    except SQLAlchemyError as e:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi CSDL: {e}",
+        )
+    except Exception as e:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi không xác định: {e}",
+        )
 
 async def get_conversation(
     request: Request,
@@ -741,4 +808,26 @@ async def get_attachment(
         redact_agents=False,
         ok_message="Chi tiết attachment Chatwoot",
         error_message="Không lấy được attachment từ Chatwoot",
+    )
+
+async def update_last_seen(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    conversation_id: int,
+    db: AsyncSession,
+):
+    """POST .../update_last_seen."""
+    return await _tenant_application_forward(
+        current_user,
+        tenant_id,
+        db,
+        request=request,
+        method="POST",
+        path_suffix=f"/conversations/{conversation_id}/update_last_seen",
+        forward_all_query_params=True,
+        redact_agents=True,
+        ok_message="Đã cập nhật last_seen conversation trên Chatwoot",
+        extra_response={"conversation_id": conversation_id},
+        error_message="Cập nhật last_seen conversation thất bại",
     )
