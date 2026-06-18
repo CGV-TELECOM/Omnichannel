@@ -8,7 +8,7 @@ from app.core.config.logging import log_user_action
 from app.core.dependencies.dependencies import get_current_user_dependency
 from app.core.security.permissions import has_permission
 from app.db.models import User
-from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody, ChatwootBulkActionLabelsBody
+from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody, ChatwootBulkActionLabelsBody, ChatwootCustomFiltersBody
 from app.services.v1 import handle_chatwoot
 
 router = APIRouter()
@@ -89,4 +89,76 @@ async def bulk_action_labels(
 ):
     return await handle_chatwoot.bulk_action_account(
         request, current_user, tenant_id, body, db
+    )
+
+@router.get("/accounts/{tenant_id}/custom_filters")
+@log_user_action("getChatwootCustomFilters")
+async def get_custom_filters_route(
+    request: Request,
+    tenant_id: UUID,
+    current_user: User = Depends(get_current_user_dependency),
+    db: AsyncSession = Depends(get_db),
+):
+    return await handle_chatwoot.get_custom_filters(
+        request=request,
+        current_user=current_user,
+        tenant_id=tenant_id,
+        db=db,
+    )
+
+@router.post("/accounts/{tenant_id}/custom_filters")
+@log_user_action("chatwootCustomFilters")
+async def custom_filters(
+    request: Request,
+    tenant_id: UUID,
+    body: ChatwootCustomFiltersBody,
+    _=Depends(has_permission("view_roles")),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    return await handle_chatwoot.custom_filters(
+        request, current_user, tenant_id, body, db
+    )
+
+@router.patch(
+    "/accounts/{tenant_id}/custom_filters/{filter_id}"
+)
+@log_user_action("chatwootUpdateCustomFilter")
+async def update_custom_filter_route(
+    request: Request,
+    tenant_id: UUID,
+    filter_id: int,
+    body: ChatwootCustomFiltersBody,
+    _=Depends(has_permission("view_roles")),
+    current_user: User = Depends(get_current_user_dependency),
+    db: AsyncSession = Depends(get_db),
+):
+    return await handle_chatwoot.update_custom_filter(
+        request=request,
+        current_user=current_user,
+        tenant_id=tenant_id,
+        filter_id=filter_id,
+        body=body,
+        db=db,
+    )
+
+
+@router.delete(
+    "/accounts/{tenant_id}/custom_filters/{filter_id}"
+)
+@log_user_action("chatwootDeleteCustomFilter")
+async def delete_custom_filter_route(
+    request: Request,
+    tenant_id: UUID,
+    filter_id: int,
+    _=Depends(has_permission("view_roles")),
+    current_user: User = Depends(get_current_user_dependency),
+    db: AsyncSession = Depends(get_db),
+):
+    return await handle_chatwoot.delete_custom_filter(
+        request=request,
+        current_user=current_user,
+        tenant_id=tenant_id,
+        filter_id=filter_id,
+        db=db,
     )

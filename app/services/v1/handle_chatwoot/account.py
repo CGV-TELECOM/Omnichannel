@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import ChatwootLegacyMap, ChatwootMapResourceType, Tenant, User
 from app.integrations.chatwoot import client as chatwoot_client
 from app.integrations.chatwoot.account_payload import sanitize_platform_account_payload
-from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody, ChatwootBulkActionLabelsBody
+from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody, ChatwootBulkActionLabelsBody, ChatwootCustomFiltersBody
 from app.schemas.responses.api_response_rule import (
     ResponseStatus,
     ResponseStatusCode,
@@ -549,6 +549,320 @@ async def bulk_action_account(
             ResponseStatusCode.INTERNAL_SERVER_ERROR,
             f"Lỗi CSDL: {e}",
         )
+    except Exception as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi không xác định: {e}",
+        )
+
+async def get_custom_filters(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    db: AsyncSession,
+):
+    try:
+        if not await isCheckMaxLevel(current_user, db):
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Chỉ quản trị viên mới thực hiện được thao tác này",
+            )
+
+        account_id, _ = await _resolve_account_id(db, tenant_id)
+
+        if account_id is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Chưa có map Chatwoot account cho tenant này",
+            )
+
+        pairs = _forward_all_query_pairs(request)
+
+        res = await chatwoot_client.application_request(
+            "GET",
+            f"/api/v1/accounts/{account_id}/custom_filters",
+            params=pairs or None,
+        )
+
+        data = res.data
+
+        if res.status_code == 200:
+            return api_response(
+                ResponseStatus.SUCCESS,
+                ResponseStatusCode.OK,
+                "Lấy danh sách custom filters thành công",
+                {
+                    "tenant_id": str(tenant_id),
+                    "chatwoot_account_id": account_id,
+                    "custom_filters": data,
+                },
+            )
+
+        return api_response(
+            ResponseStatus.ERROR,
+            res.status_code
+            if res.status_code in (400, 401, 403, 404, 422, 503)
+            else 502,
+            "Không lấy được danh sách custom filters từ Chatwoot",
+            _chatwoot_error_payload(res),
+        )
+
+    except SQLAlchemyError as e:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi CSDL: {e}",
+        )
+
+    except Exception as e:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi không xác định: {e}",
+        )
+
+async def custom_filters(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    body: ChatwootCustomFilterCreateBody,
+    db: AsyncSession,
+):
+    """
+    Forward custom filter sang Chatwoot.
+
+    Payload ví dụ:
+    {
+        "name": "Filter 1",
+        "filter_type": 0,
+        "query": {
+            "payload": [
+                {
+                    "attribute_key": "status",
+                    "attribute_model": "standard",
+                    "filter_operator": "equal_to",
+                    "values": [
+                        "open",
+                        "resolved"
+                    ],
+                    "custom_attribute_type": ""
+                }
+            ]
+        }
+    }
+    """
+    try:
+        if not await isCheckMaxLevel(current_user, db):
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Chỉ quản trị viên mới thực hiện được thao tác này",
+            )
+
+        account_id, _ = await _resolve_account_id(db, tenant_id)
+
+        if account_id is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Chưa có map Chatwoot account cho tenant này",
+            )
+
+        payload = body.model_dump(exclude_none=True)
+
+        pairs = _forward_all_query_pairs(request)
+
+        res = await chatwoot_client.application_request(
+            "POST",
+            f"/api/v1/accounts/{account_id}/custom_filters",
+            json_body=payload,
+            params=pairs or None,
+        )
+
+        data = res.data
+
+        if res.status_code in (200, 201):
+            return api_response(
+                ResponseStatus.SUCCESS,
+                ResponseStatusCode.OK,
+                "Tạo custom filter Chatwoot thành công",
+                {
+                    "tenant_id": str(tenant_id),
+                    "chatwoot_account_id": account_id,
+                    "result": data,
+                },
+            )
+
+        return api_response(
+            ResponseStatus.ERROR,
+            res.status_code if res.status_code in (400, 401, 403, 404, 422, 503) else 502,
+            "Tạo custom filter Chatwoot thất bại",
+            _chatwoot_error_payload(
+                res,
+                sent_payload_keys=sorted(payload.keys()),
+            ),
+        )
+
+    except SQLAlchemyError as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi CSDL: {e}",
+        )
+
+    except Exception as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi không xác định: {e}",
+        )
+
+async def update_custom_filter(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    filter_id: int,
+    body: ChatwootCustomFiltersBody,
+    db: AsyncSession,
+):
+    try:
+        if not await isCheckMaxLevel(current_user, db):
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Chỉ quản trị viên mới thực hiện được thao tác này",
+            )
+
+        account_id, _ = await _resolve_account_id(db, tenant_id)
+
+        if account_id is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Chưa có map Chatwoot account cho tenant này",
+            )
+
+        payload = body.model_dump(exclude_none=True)
+
+        pairs = _forward_all_query_pairs(request)
+
+        res = await chatwoot_client.application_request(
+            "PATCH",
+            f"/api/v1/accounts/{account_id}/custom_filters/{filter_id}",
+            json_body=payload,
+            params=pairs or None,
+        )
+
+        data = res.data
+
+        if res.status_code in (200, 201):
+            return api_response(
+                ResponseStatus.SUCCESS,
+                ResponseStatusCode.OK,
+                "Cập nhật custom filter thành công",
+                {
+                    "tenant_id": str(tenant_id),
+                    "chatwoot_account_id": account_id,
+                    "filter_id": filter_id,
+                    "result": data,
+                },
+            )
+
+        return api_response(
+            ResponseStatus.ERROR,
+            res.status_code
+            if res.status_code in (400, 401, 403, 404, 422, 503)
+            else 502,
+            "Cập nhật custom filter thất bại",
+            _chatwoot_error_payload(
+                res,
+                sent_payload_keys=sorted(payload.keys()),
+            ),
+        )
+
+    except SQLAlchemyError as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi CSDL: {e}",
+        )
+
+    except Exception as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi không xác định: {e}",
+        )
+
+async def delete_custom_filter(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    filter_id: int,
+    db: AsyncSession,
+):
+    try:
+        if not await isCheckMaxLevel(current_user, db):
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Chỉ quản trị viên mới thực hiện được thao tác này",
+            )
+
+        account_id, _ = await _resolve_account_id(db, tenant_id)
+
+        if account_id is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Chưa có map Chatwoot account cho tenant này",
+            )
+
+        pairs = _forward_all_query_pairs(request)
+
+        res = await chatwoot_client.application_request(
+            "DELETE",
+            f"/api/v1/accounts/{account_id}/custom_filters/{filter_id}",
+            params=pairs or None,
+        )
+
+        if res.status_code in (200, 204):
+            return api_response(
+                ResponseStatus.SUCCESS,
+                ResponseStatusCode.OK,
+                "Xóa custom filter thành công",
+                {
+                    "tenant_id": str(tenant_id),
+                    "chatwoot_account_id": account_id,
+                    "filter_id": filter_id,
+                },
+            )
+
+        return api_response(
+            ResponseStatus.ERROR,
+            res.status_code
+            if res.status_code in (400, 401, 403, 404, 422, 503)
+            else 502,
+            "Xóa custom filter thất bại",
+            _chatwoot_error_payload(res),
+        )
+
+    except SQLAlchemyError as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi CSDL: {e}",
+        )
+
     except Exception as e:
         await db.rollback()
         return api_response(

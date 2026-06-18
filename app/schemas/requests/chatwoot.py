@@ -293,3 +293,20 @@ class ConversationFilter(BaseModel):
 
 class ConversationFilterRequest(BaseModel):
     payload: List[ConversationFilter]
+
+class FilterPayload(BaseModel):
+    attribute_key: str
+    attribute_model: str
+    filter_operator: str
+    values: List[str]
+    custom_attribute_type: str = ""
+
+
+class FilterQuery(BaseModel):
+    payload: List[FilterPayload]
+
+
+class ChatwootCustomFiltersBody(BaseModel):
+    name: str
+    filter_type: Union[int, str]
+    query: FilterQuery

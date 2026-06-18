@@ -6,7 +6,6 @@ from app.services.v1 import handle_chatwoot
 
 router = APIRouter(prefix="/chatwoot-webhooks", tags=["Chatwoot Webhook"])
 
-
 @router.post("")
 async def receive_chatwoot_webhook(
     payload: dict,

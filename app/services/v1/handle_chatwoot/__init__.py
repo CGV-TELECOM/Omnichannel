@@ -7,7 +7,11 @@ from app.services.v1.handle_chatwoot.account import (
     provision_account,
     sync_integration_account_user,
     update_account,
-    bulk_action_account
+    bulk_action_account,
+    custom_filters,
+    get_custom_filters,
+    update_custom_filter,
+    delete_custom_filter
 )
 from app.services.v1.handle_chatwoot.agent_bots import (
     create_account_agent_bot,
@@ -118,5 +122,9 @@ __all__ = [
     "update_user",
     "get_attachment",
     "bulk_action_account",
+    "custom_filters",
+    "get_custom_filters",
+    "update_custom_filter",
+    "delete_custom_filter",
     "update_last_seen"
 ]
