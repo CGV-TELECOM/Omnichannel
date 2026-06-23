@@ -98,6 +98,11 @@ async def seed_rbac(db: AsyncSession):
         "create_customer",
         "edit_customer",
         "delete_customer",
+        # Customer Provided Info permissions
+        "view_customer_provided_info",
+        "create_customer_provided_info",
+        "edit_customer_provided_info",
+        "delete_customer_provided_info",
         # Tenant permissions
         "view_tenants",
         "create_tenant",
@@ -212,6 +217,10 @@ async def seed_rbac(db: AsyncSession):
         "view_customer_by_id",
         "create_customer",
         "edit_customer",
+        # Customer Provided Info (user thường chỉ được xem/tạo/sửa, KHÔNG được xóa)
+        "view_customer_provided_info",
+        "create_customer_provided_info",
+        "edit_customer_provided_info",
         "view_tenants",
     ]
     user_permissions_objects = [p for p in permissions if p.name in user_permissions]

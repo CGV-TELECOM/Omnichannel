@@ -169,8 +169,24 @@ class Tenant(Base):
     description = Column(String(255))
     is_active = Column(Integer, default=1)
     partner_id = Column(UUID(as_uuid=True), nullable=True)
+    # manhnx - merge graph: 18-06-2026
+    graph_id = Column(UUID(as_uuid=True), nullable=True) # trường dùng để map với graph kg
+    graph_activated = Column(Integer, default=0) # 0: chưa kích hoạt, 1: đã kích hoạt
+    # manhnx - merge graph: 18-06-2026
     meta_data = Column(JSONB, nullable=True)
 
+
+# manhnx - 18-06-2026: lưu lại thông tin được cung cấp từ KH
+class CustomerProvidedInfo(Base):
+    __tablename__ = "customer_provided_info"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
+    tenant_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    name = Column(String(255), nullable=True)
+    email = Column(String(255), nullable=True, index=True)
+    phone = Column(String(20), nullable=True, index=True)
+    description = Column(Text, nullable=True) # desc...
+    created_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 # Ticket System
 class TicketStatus(str, enum.Enum):

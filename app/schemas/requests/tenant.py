@@ -25,6 +25,8 @@ class GroupBase(BaseModel):
             }
         },
     )
+    graph_id: Optional[UUID] = None
+    graph_activated: Optional[int] = 0
 
 class TenantCreate(GroupBase):
     pass

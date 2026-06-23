@@ -33,3 +33,38 @@ def test_walk_redact_agent_refs():
     assert res["sender"]["id"] == str(local_uuid)
     assert res["conversation"]["assignee"]["id"] == str(local_uuid)
     assert "account_id" not in res
+
+def test_customer_provided_info_schema():
+    from datetime import datetime, timezone
+    from app.schemas.requests.customer_provided_info import CustomerProvidedInfoResponse
+    from app.db.models import CustomerProvidedInfo
+    import uuid
+
+    info_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    now = datetime.now(timezone.utc)
+
+    # Instantiate the SQLAlchemy model mock
+    db_obj = CustomerProvidedInfo(
+        id=info_id,
+        tenant_id=tenant_id,
+        name="Test User",
+        email="test@example.com",
+        phone="0123456789",
+        description="Providing feedback",
+        created_at=now,
+        updated_at=now
+    )
+
+    # Validate response schema from_attributes
+    response = CustomerProvidedInfoResponse.model_validate(db_obj)
+
+    assert response.id == info_id
+    assert response.tenant_id == tenant_id
+    assert response.name == "Test User"
+    assert response.email == "test@example.com"
+    assert response.phone == "0123456789"
+    assert response.description == "Providing feedback"
+    assert response.created_at == now
+    assert response.updated_at == now
+

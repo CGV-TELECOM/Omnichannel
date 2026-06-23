@@ -53,7 +53,7 @@ def _tenant_chatwoot_account_payload(tenant: Tenant) -> tuple[dict[str, Any], di
     return sanitize_platform_account_payload(raw)
 
 
-async def getAllTenant(_: Request, current_user: User, id: UUID | None, page: int, page_size: int, search: str | None, db: AsyncSession):
+async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id: UUID | None, graph_activated: int | None, page: int, page_size: int, search: str | None, db: AsyncSession):
     try:
         if not (await isCheckMaxLevel(current_user, db)):
             return api_response(
@@ -80,10 +80,16 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, page: in
                     description=result_tenant.description,
                     is_active=result_tenant.is_active,
                     meta_data=result_tenant.meta_data,
+                    graph_id=result_tenant.graph_id,
+                    graph_activated=result_tenant.graph_activated,
                 )
             )
         else:
             query = select(Tenant)
+            if graph_id:
+                query = query.where(Tenant.graph_id == graph_id)
+            if graph_activated is not None:
+                query = query.where(Tenant.graph_activated == graph_activated)
             if search:
                 search_text = f"%{search}%"
                 query = query.where(
@@ -110,6 +116,8 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, page: in
                     description=t.description,
                     is_active=t.is_active,
                     meta_data=t.meta_data,
+                    graph_id=t.graph_id,
+                    graph_activated=t.graph_activated,
                 )
                 for t in tenants
             ]
@@ -169,6 +177,8 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             name=tenant_data.name,
             description=tenant_data.description,
             meta_data=tenant_data.meta_data,
+            graph_id=tenant_data.graph_id,
+            graph_activated=tenant_data.graph_activated if tenant_data.graph_activated is not None else 0,
         )
         db.add(new_tenant)
         await db.flush()
@@ -366,6 +376,8 @@ async def updateTenant(
                 description=tenant.description,
                 is_active=tenant.is_active,
                 meta_data=tenant.meta_data,
+                graph_id=tenant.graph_id,
+                graph_activated=tenant.graph_activated,
             ),
         )
 

@@ -320,10 +320,30 @@ async def get_all_users(
         total_count = await db.scalar(count_query) or 0
         total_pages = (total_count + page_size - 1) // page_size
 
+        # Lấy danh sách ID người dùng để query hàng loạt permissions
+        user_ids = [user.id for user in users]
+        permissions_map = {}
+        if user_ids:
+            try:
+                stmt_perm = (
+                    select(User.id, Permission.name)
+                    .join(Role, User.role_id == Role.id)
+                    .join(RolePermission, Role.id == RolePermission.role_id)
+                    .join(Permission, RolePermission.permission_id == Permission.id)
+                    .where(User.id.in_(user_ids))
+                )
+                result_perm = await db.execute(stmt_perm)
+                for uid, perm_name in result_perm.all():
+                    if uid not in permissions_map:
+                        permissions_map[uid] = []
+                    permissions_map[uid].append(perm_name)
+            except SQLAlchemyError as e:
+                print(f"Error querying batch user permissions: {str(e)}")
+
         # Tạo danh sách dữ liệu trả về
         user_data = []
         for user in users:
-            permissions = await get_user_permissions(user.id, db)
+            permissions = permissions_map.get(user.id, [])
             user_data.append({
                 "id": user.id,
                 "username": user.username,

@@ -33,6 +33,7 @@ from app.api.v1.endpoints.ticket_flow import router as router_ticket_flow
 from app.api.v1.endpoints.ticket_flow_instance import router as router_ticket_flow_instance
 from app.api.v1.endpoints.ticket_flow_step import router as router_ticket_flow_step
 from app.api.v1.endpoints.customer import router as router_customer
+from app.api.v1.endpoints.customer_provided_info import router as router_customer_provided_info
 from app.api.v1.endpoints.chatwoot import router as router_chatwoot
 from app.api.v1.endpoints.chatwoot.webhook import router as router_chatwoot_webhook
 # WebSocket & Notifications
@@ -73,6 +74,7 @@ protected_routers = [
     router_ticket_flow_instance,
     router_ticket_flow_step,
     router_customer,
+    router_customer_provided_info,
     router_notification,
     router_chatwoot,
 ]
@@ -127,8 +129,8 @@ def websocket_status():
 # Mount Socket.IO app
 app.mount("/socket.io", socket_manager.socket_app)
 
-#@app.on_event("startup")
-#async def on_startup():
+# @app.on_event("startup")
+# async def on_startup():
 #    async with async_session_maker() as session:
 #        await seed_rbac(session)
 
