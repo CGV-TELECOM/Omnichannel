@@ -201,6 +201,9 @@ async def get_current_user_or_none(request, db : AsyncSession):
         # Lấy danh sách quyền của người dùng
         permissions = await get_user_permissions(user_id, db)
         # Tạo response với thông tin người dùng và quyền
+
+        tenant = await db.get(Tenant, user.tenant_id)
+
         user_data = {
             "id": user.id,
             "username": user.username,
@@ -210,6 +213,8 @@ async def get_current_user_or_none(request, db : AsyncSession):
             "role": user.role.name if user.role else None,
             "level": user.level.name if user.level else None,
             "tenant_id": user.tenant_id,
+            "graph_id": tenant.graph_id if tenant else None,
+            "graph_activated": tenant.graph_activated if tenant else None,
             "meta_data": user.meta_data,
             "permissions": permissions
         }

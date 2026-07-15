@@ -222,6 +222,33 @@ async def get_conversation(
             f"Lỗi không xác định: {e}",
         )
 
+async def delete_conversation(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    conversation_id: int,
+    db: AsyncSession,
+):
+    """DELETE .../accounts/{account_id}/conversations/{conversation_id}"""
+    return await _tenant_application_forward(
+        current_user,
+        tenant_id,
+        db,
+        request=request,
+        method="DELETE",
+        path_suffix=f"/conversations/{conversation_id}",
+        forward_all_query_params=True,
+        redact_agents=False,
+        ok_message="Đã xóa conversation trên Chatwoot",
+        success_codes=frozenset({200, 204}),
+        extra_response={
+            "conversation_id": conversation_id,
+        },
+        error_message="Xóa conversation trên Chatwoot thất bại",
+    )
+
+
+
 
 async def list_conversation_messages(
     request: Request,

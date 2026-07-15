@@ -134,6 +134,19 @@ async def list_tenant_conversations(
         request, current_user, tenant_id, db
     )
 
+@router.delete("/tenants/{tenant_id}/conversations/{conversation_id}")
+async def delete_tenant_conversation(
+    request: Request,
+    tenant_id: UUID,
+    conversation_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """DELETE /api/v1/accounts/{account_id}/conversations/{conversation_id}."""
+    return await handle_chatwoot.delete_conversation(
+        request, current_user, tenant_id, conversation_id, db
+)
+
 @router.post("/tenants/{tenant_id}/conversations/filter")
 async def filter_tenant_conversations(
     request: Request,
