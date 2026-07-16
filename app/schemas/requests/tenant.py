@@ -9,9 +9,11 @@ class GroupBase(BaseModel):
         default=None,
         description=(
             "Dữ liệu mở rộng (JSON) để cấu hình đồng bộ Chatwoot Account (map theo tenant).\n\n"
-            "Toàn bộ key/value trong `meta_data` có thể được dùng để build payload gọi Chatwoot Platform API "
-            "`/platform/api/v1/accounts` (ví dụ: `locale`, `domain`, `support_email`, `features`, `limits`, "
-            "`custom_attributes`, ...).\n\n"
+            "Toàn bộ key/value trong `meta_data` có thể được dùng để cấu hình Chatbot hoặc build payload gọi Chatwoot Platform API "
+            "`/platform/api/v1/accounts` (ví dụ: `locale`, `domain`, `support_email`, `features`, `limits`, `custom_attributes`, ...).\n\n"
+            "Cấu hình Chatbot:\n"
+            "- `default_responder` (str): 'bot' hoặc 'agent' (mặc định phản hồi khi có chat mới).\n"
+            "- `chatbot_enabled` (bool): True hoặc False (bật/tắt tính năng chatbot).\n\n"
             "- `features` sẽ được sanitize theo whitelist để tránh Chatwoot 500/duplicate account.\n"
             "- Tương thích ngược: nếu có `meta_data.chatwoot_account` (dict) thì ưu tiên dùng phần đó."
         ),

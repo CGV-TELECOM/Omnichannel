@@ -59,6 +59,7 @@ class Settings:
     SMTP_PORT: int = int(os.getenv("SMTP_PORT"))
     SMTP_USERNAME: str = os.getenv("SMTP_USERNAME")
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD")
+
     # Chatwoot (Platform API: tài khoản; Application API: agent — cần user api_access_token)
     CHATWOOT_BASE_URL: str | None = _sanitize_chatwoot_env(os.getenv("CHATWOOT_BASE_URL"))
     CHATWOOT_PLATFORM_API_TOKEN: str | None = _sanitize_chatwoot_env(
@@ -72,6 +73,9 @@ class Settings:
         "CHATWOOT_INTEGRATION_USER_ID"
     )
     PUBLIC_BACKEND_URL: str | None = os.getenv("PUBLIC_BACKEND_URL")
+    # Knowledge Graph (KG) Chatbot settings
+    KG_CORE_URL: str = os.getenv("KG_CORE_URL", "https://techstorehust.site/api/v1/chat/completions/stream")
+    KG_CORE_API_KEY: str | None = os.getenv("KG_CORE_API_KEY")
 
 
 settings = Settings()

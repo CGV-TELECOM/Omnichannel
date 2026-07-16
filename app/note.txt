@@ -1,0 +1,4 @@
+Cấu hình CSDL (Database): Cập nhật dữ liệu:
+graph_activated = 1 (Kích hoạt bộ não AI).
+graph_id = "b10add77-0a1b-4974-9411-15ff68de61cd" (Đặt ID Agent AI đúng như ảnh bạn gửi).
+meta_data = {"chatbot_enabled": true, "default_responder": "bot"} (Mặc định Bot trả lời cuộc chat mới).

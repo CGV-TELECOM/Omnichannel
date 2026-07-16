@@ -83,6 +83,73 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
             data={"event": event_type, "payload": mapped_payload},
         )
 
+        # 4. Xử lý logic Chatbot tích hợp
+        from app.db.models import Tenant
+        from app.core.config.app_config import settings
+        from app.services.v1.handle_chatwoot.chatbot import (
+            should_bot_respond,
+            call_kg_chatbot_core,
+            send_chatwoot_reply,
+            chatbot_enabled,
+            send_internal_note,
+        )
+
+        # Xử lý sự kiện tin nhắn mới (message_created)
+        if event_type == "message_created" and payload.get("message_type") == "incoming" and not payload.get("private"):
+            conversation_payload = payload.get("conversation") or {}
+            conversation_id = conversation_payload.get("id")
+            message_content = payload.get("content") or ""
+
+            if conversation_id:
+                bot_should_reply = await should_bot_respond(db, tenant_id, conversation_payload)
+                if bot_should_reply:
+                    tenant = await db.get(Tenant, tenant_id)
+                    if tenant and tenant.graph_id:
+                        session_id = conversation_payload.get("uuid") or str(conversation_id)
+                        reply_text = await call_kg_chatbot_core(
+                            tenant_id=tenant_id,
+                            graph_id=tenant.graph_id,
+                            session_id=session_id,
+                            message_content=message_content,
+                        )
+                        if reply_text:
+                            await send_chatwoot_reply(
+                                account_id=int(account_id),
+                                conversation_id=conversation_id,
+                                reply_text=reply_text,
+                            )
+
+        # Xử lý sự kiện cuộc hội thoại được cập nhật (conversation_updated) để tự động tắt bot
+        elif event_type == "conversation_updated":
+            conversation_payload = payload
+            if "conversation" in payload and isinstance(payload["conversation"], dict):
+                conversation_payload = payload["conversation"]
+
+            assignee = conversation_payload.get("assignee")
+            conversation_id = conversation_payload.get("id")
+
+            if conversation_id and assignee is not None:
+                assignee_id = assignee.get("id")
+                integration_bot_id = settings.CHATWOOT_INTEGRATION_USER_ID
+
+                # Nếu được gán cho nhân viên thật (không phải Bot và không phải rỗng)
+                if assignee_id is not None and assignee_id != integration_bot_id:
+                    custom_attrs = conversation_payload.get("custom_attributes") or {}
+                    labels = conversation_payload.get("labels") or []
+                    
+                    # Nếu bot chưa bị tắt
+                    if custom_attrs.get("is_bot_active") is not False and "bot-disabled" not in labels:
+                        await chatbot_enabled(
+                            account_id=int(account_id),
+                            conversation_id=conversation_id,
+                            is_active=False,
+                        )
+                        await send_internal_note(
+                            account_id=int(account_id),
+                            conversation_id=conversation_id,
+                            note_text="Nhân viên hỗ trợ đã tiếp nhận. Bot tự động tạm dừng.",
+                        )
+
         return api_response(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,
