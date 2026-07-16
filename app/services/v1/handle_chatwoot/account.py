@@ -102,6 +102,31 @@ async def provision_account(
 
         chat_id = int(data["id"])
         link_info = await link_integration_user_to_chatwoot_account(chat_id)
+        if not link_info.get("linked"):
+            import logging
+            logger = logging.getLogger(__name__)
+            try:
+                await chatwoot_client.platform_request(
+                    "DELETE",
+                    f"/platform/api/v1/accounts/{chat_id}",
+                )
+            except Exception as delete_ex:
+                logger.error(
+                    "Lỗi khi xóa account Chatwoot %s sau khi liên kết thất bại: %s",
+                    chat_id,
+                    str(delete_ex),
+                )
+            await db.rollback()
+            msg = "Gắn user tích hợp vào Chatwoot account thất bại, đã rollback tạo doanh nghiệp"
+            if link_info.get("skipped_reason"):
+                msg += f". Lý do: {link_info.get('skipped_reason')}"
+            return api_response(
+                ResponseStatus.ERROR,
+                502,
+                msg,
+                {"integration_account_user": link_info},
+            )
+
 
         # Tự động đăng ký webhook của Backend lên Chatwoot nếu cấu hình PUBLIC_BACKEND_URL
         from app.core.config.app_config import settings
@@ -166,23 +191,11 @@ async def provision_account(
         }
         if sanitize_meta:
             success_data["payload_sanitize_meta"] = sanitize_meta
-        msg = "Đã tạo Chatwoot account và lưu map tenant"
-        if link_info.get("linked"):
-            msg += (
-                ". Đã gắn user tích hợp (Application API) vào account với role "
-                f"{_INTEGRATION_ACCOUNT_USER_ROLE}."
-            )
-        elif link_info.get("attempted") and not link_info.get("linked"):
-            msg += (
-                ". Cảnh báo: không gắn được user tích hợp vào account — "
-                "xem integration_account_user trong data."
-            )
-        else:
-            sr = link_info.get("skipped_reason") or ""
-            msg += (
-                ". Gợi ý: cấu hình CHATWOOT_USER_API_TOKEN hoặc CHATWOOT_INTEGRATION_USER_ID "
-                f"để tự gắn user vào account khi provision. ({sr})"
-            )
+        msg = (
+            "Đã tạo Chatwoot account và lưu map tenant. "
+            "Đã gắn user tích hợp (Application API) vào account với role "
+            f"{_INTEGRATION_ACCOUNT_USER_ROLE}."
+        )
         return api_response(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,

@@ -53,7 +53,7 @@ def _tenant_chatwoot_account_payload(tenant: Tenant) -> tuple[dict[str, Any], di
     return sanitize_platform_account_payload(raw)
 
 
-async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id: UUID | None, graph_activated: int | None, page: int, page_size: int, search: str | None, db: AsyncSession):
+async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id: UUID | None, is_active: int | None, graph_activated: int | None, page: int, page_size: int, search: str | None, db: AsyncSession):
     try:
         if not (await isCheckMaxLevel(current_user, db)):
             return api_response(
@@ -88,6 +88,8 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
             query = select(Tenant)
             if graph_id:
                 query = query.where(Tenant.graph_id == graph_id)
+            if is_active is not None:
+                query = query.where(Tenant.is_active == is_active)
             if graph_activated is not None:
                 query = query.where(Tenant.graph_activated == graph_activated)
             if search:
@@ -215,7 +217,36 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
                 {"chatwoot_response": cw_res.data},
             )
 
+        # link integration user
+        from app.services.v1.handle_chatwoot._shared import link_integration_user_to_chatwoot_account
+        link_info = await link_integration_user_to_chatwoot_account(chatwoot_account_id)
+        if not link_info.get("linked"):
+            import logging
+            logger = logging.getLogger(__name__)
+            try:
+                await chatwoot_client.platform_request(
+                    "DELETE",
+                    f"/platform/api/v1/accounts/{chatwoot_account_id}",
+                )
+            except Exception as delete_ex:
+                logger.error(
+                    "Lỗi khi xóa account Chatwoot %s sau khi liên kết thất bại: %s",
+                    chatwoot_account_id,
+                    str(delete_ex),
+                )
+            await db.rollback()
+            msg = "Gắn user tích hợp vào Chatwoot account thất bại, đã rollback tạo doanh nghiệp"
+            if link_info.get("skipped_reason"):
+                msg += f". Lý do: {link_info.get('skipped_reason')}"
+            return api_response(
+                ResponseStatus.ERROR,
+                502,
+                msg,
+                {"integration_account_user": link_info},
+            )
+
         db.add(
+
             ChatwootLegacyMap(
                 resource_type=ChatwootMapResourceType.ACCOUNT,
                 local_uuid=new_tenant.id,

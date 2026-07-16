@@ -20,6 +20,7 @@ async def getAllTenant(
     page: int = Query(1, ge=1, description="Số trang"),
     id: Optional[UUID] = Query(None, description="ID của tenant"),
     graph_id: Optional[UUID] = Query(None, description="ID của graph kg"),
+    is_active: Optional[int] = Query(None, description="Trạng thái kích hoạt (0: chưa kích hoạt, 1: đã kích hoạt)"),
     graph_activated: Optional[int] = Query(None, description="Trạng thái kích hoạt graph (0: chưa kích hoạt, 1: đã kích hoạt)"),
     page_size: int = Query(10, ge=1, le=100, description="Số bản ghi mỗi trang"),
     search: Optional[str] = Query(None, description="Từ khóa tìm kiếm"),
@@ -27,7 +28,7 @@ async def getAllTenant(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency)
 ): 
-    return await handle_tenant.getAllTenant(request, current_user, id, graph_id, graph_activated, page, page_size, search, db)
+    return await handle_tenant.getAllTenant(request, current_user, id, graph_id, is_active, graph_activated, page, page_size, search, db)
 
 @router.post("")
 @log_user_action("createTenant")
