@@ -174,7 +174,7 @@ class Tenant(Base):
     agent_id = Column(UUID(as_uuid=True), nullable=True) # trường dùng để map với agent kg để trả lời
     graph_activated = Column(Integer, default=0) # 0: chưa kích hoạt, 1: đã kích hoạt
     # manhnx - merge graph: 18-06-2026
-    meta_data = Column(JSONB, nullable=True)
+    meta_data = Column(JSONB, nullable=True, default=lambda: {"chatbot_enabled": True, "default_responder": "bot"})
 
 
 # manhnx - 18-06-2026: lưu lại thông tin được cung cấp từ KH

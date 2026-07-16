@@ -19,9 +19,9 @@ async def should_bot_respond(
     """
     Quyết định xem chatbot có nên phản hồi khách hàng trong hội thoại này không.
     """
-    # 1. Kiểm tra Tenant có cấu hình Graph (KB) hay không
+    # 1. Kiểm tra Tenant có cấu hình Agent hay không
     tenant = await db.get(Tenant, tenant_id)
-    if not tenant or not tenant.graph_id or not tenant.graph_activated:
+    if not tenant or not tenant.agent_id or not tenant.graph_activated:
         return False
 
     # Đọc cấu hình từ tenant meta_data
@@ -57,7 +57,7 @@ async def should_bot_respond(
 
 async def call_kg_chatbot_core(
     tenant_id: UUID,
-    graph_id: UUID,
+    agent_id: UUID,
     session_id: str,
     message_content: str,
 ) -> str | None:
@@ -74,7 +74,7 @@ async def call_kg_chatbot_core(
         headers["api-key"] = settings.KG_CORE_API_KEY
 
     payload = {
-        "agent_id": str(graph_id),
+        "agent_id": str(agent_id),
         "channel": "admin-ui",
         "include_citations": True,
         "messages": [{"role": "user", "content": message_content}],

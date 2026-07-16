@@ -214,6 +214,7 @@ async def get_current_user_or_none(request, db : AsyncSession):
             "level": user.level.name if user.level else None,
             "tenant_id": user.tenant_id,
             "graph_id": tenant.graph_id if tenant else None,
+            "agent_id": tenant.agent_id if tenant else None,
             "graph_activated": tenant.graph_activated if tenant else None,
             "meta_data": user.meta_data,
             "permissions": permissions

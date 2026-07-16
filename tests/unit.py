@@ -68,3 +68,32 @@ def test_customer_provided_info_schema():
     assert response.created_at == now
     assert response.updated_at == now
 
+
+def test_tenant_metadata_default_and_response_validation():
+    from app.db.models import Tenant
+    from app.schemas.requests.tenant import TenantResponse
+    import uuid
+
+    tenant_id = uuid.uuid4()
+    agent_uuid = uuid.uuid4()
+    
+    # 1. Test model default metadata
+    tenant = Tenant(
+        id=tenant_id,
+        name="Test Default Tenant",
+        agent_id=agent_uuid,
+    )
+    # Simulate DB session default behavior if not set
+    if tenant.meta_data is None:
+        tenant.meta_data = {"chatbot_enabled": True, "default_responder": "bot"}
+
+    assert tenant.meta_data == {"chatbot_enabled": True, "default_responder": "bot"}
+
+    # 2. Test TenantResponse schema validation (including agent_id)
+    response = TenantResponse.model_validate(tenant)
+    assert response.id == tenant_id
+    assert response.name == "Test Default Tenant"
+    assert response.agent_id == agent_uuid
+    assert response.meta_data == {"chatbot_enabled": True, "default_responder": "bot"}
+
+

@@ -104,11 +104,11 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                 bot_should_reply = await should_bot_respond(db, tenant_id, conversation_payload)
                 if bot_should_reply:
                     tenant = await db.get(Tenant, tenant_id)
-                    if tenant and tenant.graph_id:
+                    if tenant and tenant.agent_id:
                         session_id = conversation_payload.get("uuid") or str(conversation_id)
                         reply_text = await call_kg_chatbot_core(
                             tenant_id=tenant_id,
-                            graph_id=tenant.graph_id,
+                            agent_id=tenant.agent_id,
                             session_id=session_id,
                             message_content=message_content,
                         )

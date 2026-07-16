@@ -53,7 +53,7 @@ def _tenant_chatwoot_account_payload(tenant: Tenant) -> tuple[dict[str, Any], di
     return sanitize_platform_account_payload(raw)
 
 
-async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id: UUID | None, is_active: int | None, graph_activated: int | None, page: int, page_size: int, search: str | None, db: AsyncSession):
+async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id: UUID | None, agent_id: UUID | None, is_active: int | None, graph_activated: int | None, page: int, page_size: int, search: str | None, db: AsyncSession):
     try:
         if not (await isCheckMaxLevel(current_user, db)):
             return api_response(
@@ -81,6 +81,7 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
                     is_active=result_tenant.is_active,
                     meta_data=result_tenant.meta_data,
                     graph_id=result_tenant.graph_id,
+                    agent_id=result_tenant.agent_id,
                     graph_activated=result_tenant.graph_activated,
                 )
             )
@@ -88,6 +89,8 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
             query = select(Tenant)
             if graph_id:
                 query = query.where(Tenant.graph_id == graph_id)
+            if agent_id:
+                query = query.where(Tenant.agent_id == agent_id)
             if is_active is not None:
                 query = query.where(Tenant.is_active == is_active)
             if graph_activated is not None:
@@ -119,6 +122,7 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
                     is_active=t.is_active,
                     meta_data=t.meta_data,
                     graph_id=t.graph_id,
+                    agent_id=t.agent_id,
                     graph_activated=t.graph_activated,
                 )
                 for t in tenants
@@ -174,12 +178,17 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
                 "Đã tồn tại tên tenant này rồi, vui lòng kiểm tra lại"
             )  
 
+        meta = {"chatbot_enabled": True, "default_responder": "bot"}
+        if tenant_data.meta_data and isinstance(tenant_data.meta_data, dict):
+            meta.update(tenant_data.meta_data)
+
         # Tạo tenant mới
         new_tenant = Tenant(
             name=tenant_data.name,
             description=tenant_data.description,
-            meta_data=tenant_data.meta_data,
+            meta_data=meta,
             graph_id=tenant_data.graph_id,
+            agent_id=tenant_data.agent_id,
             graph_activated=tenant_data.graph_activated if tenant_data.graph_activated is not None else 0,
         )
         db.add(new_tenant)
@@ -408,6 +417,7 @@ async def updateTenant(
                 is_active=tenant.is_active,
                 meta_data=tenant.meta_data,
                 graph_id=tenant.graph_id,
+                agent_id=tenant.agent_id,
                 graph_activated=tenant.graph_activated,
             ),
         )
