@@ -482,27 +482,6 @@ async def update_inbox(
     )
 
 
-async def list_teams(
-    request: Request,
-    current_user: User,
-    tenant_id: UUID,
-    db: AsyncSession,
-):
-    """GET /api/v1/accounts/{account_id}/teams — hỗ trợ UI assign team."""
-    return await _tenant_application_forward(
-        current_user,
-        tenant_id,
-        db,
-        request=request,
-        method="GET",
-        path_suffix="/teams",
-        forward_all_query_params=True,
-        redact_agents=False,
-        ok_message="Danh sách team Chatwoot",
-        error_message="Không lấy được danh sách team từ Chatwoot",
-    )
-
-
 async def create_conversation(
     request: Request,
     current_user: User,

@@ -49,7 +49,6 @@ from app.services.v1.handle_chatwoot.conversations import (
     list_conversation_messages,
     list_conversations,
     list_inboxes,
-    list_teams,
     set_conversation_labels,
     toggle_conversation_status,
     toggle_conversation_typing,
@@ -58,6 +57,17 @@ from app.services.v1.handle_chatwoot.conversations import (
     update_inbox,
     get_attachment,
     update_last_seen
+)
+from app.services.v1.handle_chatwoot.teams import (
+    list_teams,
+    create_team,
+    get_team,
+    update_team,
+    delete_team,
+    list_team_members,
+    add_team_members,
+    remove_team_members,
+    update_team_members,
 )
 from app.services.v1.handle_chatwoot.users import (
     create_user,
@@ -108,6 +118,14 @@ __all__ = [
     "list_inboxes",
     "list_labels",
     "list_teams",
+    "create_team",
+    "get_team",
+    "update_team",
+    "delete_team",
+    "list_team_members",
+    "add_team_members",
+    "remove_team_members",
+    "update_team_members",
     "list_tenant_agent_bots",
     "provision_account",
     "set_conversation_labels",

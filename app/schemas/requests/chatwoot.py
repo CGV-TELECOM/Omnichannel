@@ -280,7 +280,8 @@ class ChatwootBulkActionLabelsBody(BaseModel):
     """POST .../conversations/bulk_action_labels — thêm hoặc xóa label cho nhiều conversation."""
     type: Literal["Conversation"]
     ids: list[int]
-    labels: dict[str, list[str]]
+    labels: dict[str, list[str]] = Field(default_factory=dict)
+    fields: dict[str, Any] = Field(default_factory=dict)
 
 class ConversationFilter(BaseModel):
     """Shape filter conversation khi gọi GET /api/v1/accounts/{account_id}/conversations."""
@@ -310,3 +311,31 @@ class ChatwootCustomFiltersBody(BaseModel):
     name: str
     filter_type: Union[int, str]
     query: FilterQuery
+
+
+class ChatwootTeamCreateBody(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(min_length=1, description="The name of the team")
+    description: str | None = Field(default=None, description="The description of the team")
+    allow_auto_assign: bool | None = Field(
+        default=None, description="Whether to allow auto assignment of conversations"
+    )
+
+
+class ChatwootTeamUpdateBody(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str | None = Field(default=None, min_length=1, description="The name of the team")
+    description: str | None = Field(default=None, description="The description of the team")
+    allow_auto_assign: bool | None = Field(
+        default=None, description="Whether to allow auto assignment of conversations"
+    )
+
+
+class ChatwootTeamMembersBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_ids: list[UUID] = Field(
+        description="List of local agent/user UUIDs to add/remove/update in the team"
+    )

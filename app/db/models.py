@@ -465,6 +465,7 @@ class ChatwootMapResourceType(str, enum.Enum):
     USER = "user"
     AGENT = "agent"
     AGENT_BOT = "agent_bot"
+    TEAM = "team"
 
 
 class ChatwootLegacyMap(Base):

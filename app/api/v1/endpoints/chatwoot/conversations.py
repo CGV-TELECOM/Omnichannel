@@ -74,16 +74,6 @@ async def update_tenant_inbox(
         request, current_user, tenant_id, inbox_id, body, db
     )
 
-@router.get("/tenants/{tenant_id}/teams")
-async def list_tenant_teams(
-    request: Request,
-    tenant_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user_dependency),
-):
-    """GET /api/v1/accounts/{account_id}/teams — dùng cho UI chọn team khi assign."""
-    return await handle_chatwoot.list_teams(request, current_user, tenant_id, db)
-
 
 @router.get("/tenants/{tenant_id}/labels")
 async def list_tenant_labels(
