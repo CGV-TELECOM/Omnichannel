@@ -32,6 +32,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _chatwoot_error_payload,
     _forward_all_query_pairs,
     _map_tenant_agent_by_local,
+    _map_tenant_team_by_local,
     _redact_chatwoot_agent_like_user,
     _require_tenant_access,
     _resolve_account_id,
@@ -317,6 +318,7 @@ async def assign_conversation(
     body: ChatwootConversationAssignBody,
     db: AsyncSession,
 ):
+    print(f"Vào đây")
     """
     POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments
     — [Assign Conversation](https://developers.chatwoot.com/api-reference/conversation-assignments/assign-conversation).
@@ -342,8 +344,18 @@ async def assign_conversation(
                     "Không có map agent cho UUID này (gọi GET agents để tạo map hoặc tạo agent)",
                 )
             payload["assignee_id"] = m.chatwoot_id
-        if body.team_id is not None and body.assignee_agent_uuid is None:
-            payload["team_id"] = body.team_id
+        if body.team_id is not None:
+            tm = await _map_tenant_team_by_local(db, tenant_id, body.team_id)
+            if not tm:
+                return api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.NOT_FOUND,
+                    "Không có map team cho UUID này (gọi GET teams để tạo map hoặc tạo team)",
+                )
+            if body.assignee_agent_uuid is None:
+                payload["team_id"] = tm.chatwoot_id
+
+        print(f"Check team_id: {body.team_id}")
         res = await chatwoot_client.application_request(
             "POST",
             f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments",

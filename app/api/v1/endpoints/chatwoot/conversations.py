@@ -324,6 +324,7 @@ async def update_tenant_conversation_custom_attributes(
 @router.post("/tenants/{tenant_id}/conversations/{conversation_id}/assignments")
 @log_user_action("chatwootAssignConversation")
 async def assign_tenant_conversation(
+    request: Request,
     tenant_id: UUID,
     conversation_id: int,
     body: ChatwootConversationAssignBody,

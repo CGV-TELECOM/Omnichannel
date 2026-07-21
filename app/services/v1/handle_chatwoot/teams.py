@@ -30,7 +30,9 @@ from app.services.v1.handle_chatwoot._shared import (
     _ensure_tenant_agent_map,
     _chatwoot_agent_public,
     _agents_payload_as_list,
+    _map_tenant_team_by_local,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -60,21 +62,6 @@ async def _ensure_tenant_team_map(
     db.add(row)
     await db.flush()
     return row
-
-
-async def _map_tenant_team_by_local(
-    db: AsyncSession, tenant_id: UUID, local_id: UUID
-) -> ChatwootLegacyMap | None:
-    q = await db.execute(
-        select(ChatwootLegacyMap).where(
-            and_(
-                ChatwootLegacyMap.resource_type == ChatwootMapResourceType.TEAM,
-                ChatwootLegacyMap.tenant_id == tenant_id,
-                ChatwootLegacyMap.local_uuid == local_id,
-            )
-        )
-    )
-    return q.scalar_one_or_none()
 
 
 def _chatwoot_team_public(team: dict[str, Any], local_uuid: UUID) -> dict[str, Any]:

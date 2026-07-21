@@ -427,6 +427,22 @@ async def _map_tenant_agent_bot_by_local(
     return q.scalar_one_or_none()
 
 
+async def _map_tenant_team_by_local(
+    db: AsyncSession, tenant_id: UUID, local_id: UUID
+) -> ChatwootLegacyMap | None:
+    q = await db.execute(
+        select(ChatwootLegacyMap).where(
+            and_(
+                ChatwootLegacyMap.resource_type == ChatwootMapResourceType.TEAM,
+                ChatwootLegacyMap.tenant_id == tenant_id,
+                ChatwootLegacyMap.local_uuid == local_id,
+            )
+        )
+    )
+    return q.scalar_one_or_none()
+
+
+
 async def _map_user_by_local(
     db: AsyncSession, local_user_id: UUID
 ) -> ChatwootLegacyMap | None:

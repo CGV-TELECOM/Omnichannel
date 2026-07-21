@@ -213,7 +213,7 @@ class ChatwootConversationAssignBody(BaseModel):
     ([Assign Conversation](https://developers.chatwoot.com/api-reference/conversation-assignments/assign-conversation)).
 
     - Gửi **assignee_agent_uuid** để gán agent (UUID nội bộ đã map với Chatwoot agent id).
-    - Hoặc gửi **team_id** (id số trên Chatwoot). Nếu có cả hai, Chatwoot ưu tiên assignee.
+    - Hoặc gửi **team_id** (UUID team nội bộ đã map với Chatwoot team id). Nếu có cả hai, Chatwoot ưu tiên assignee.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -222,9 +222,9 @@ class ChatwootConversationAssignBody(BaseModel):
         default=None,
         description="UUID agent trong contact-center (bảng map); không gửi id số Chatwoot.",
     )
-    team_id: int | None = Field(
+    team_id: UUID | None = Field(
         default=None,
-        description="Id team trên Chatwoot (Application API dùng số).",
+        description="UUID team trong contact-center (bảng map); không gửi id số Chatwoot.",
     )
 
     @model_validator(mode="after")
