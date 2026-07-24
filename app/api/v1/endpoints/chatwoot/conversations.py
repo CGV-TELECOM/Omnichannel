@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config.database import get_db
@@ -116,10 +116,18 @@ async def delete_tenant_label(
 async def list_tenant_conversations(
     request: Request,
     tenant_id: UUID,
+    status: str | None = Query(None, description="Trạng thái: open, resolved, pending, snoozed, all"),
+    assignee_type: str | None = Query(None, description="Loại assignee: me, unassigned, all, assigned"),
+    team_id: UUID | None = Query(None, description="UUID team trong contact-center (bảng map)"),
+    inbox_id: int | None = Query(None, description="ID inbox trên Chatwoot"),
+    page: int | None = Query(None, description="Số trang (mặc định 1)"),
+    sort_by: str | None = Query(None, description="Sắp xếp: last_activity_at_desc, last_activity_at_asc, created_at_desc, etc."),
+    q: str | None = Query(None, description="Từ khóa tìm kiếm"),
+    labels: str | None = Query(None, description="Nhãn conversation"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """GET /api/v1/accounts/{account_id}/conversations — query whitelist trong handler."""
+    """GET /api/v1/accounts/{account_id}/conversations."""
     return await handle_chatwoot.list_conversations(
         request, current_user, tenant_id, db
     )

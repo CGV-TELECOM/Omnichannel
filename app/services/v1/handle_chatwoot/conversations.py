@@ -61,7 +61,38 @@ async def list_conversations(
                 ResponseStatusCode.NOT_FOUND,
                 "Chưa có map Chatwoot account cho tenant này",
             )
-        pairs = _forward_all_query_pairs(request)
+        raw_pairs = _forward_all_query_pairs(request)
+        pairs: list[tuple[str, str]] = []
+        for k, v in raw_pairs:
+            if k == "team_id":
+                try:
+                    team_uuid = UUID(v)
+                    tm = await _map_tenant_team_by_local(db, tenant_id, team_uuid)
+                    if not tm:
+                        return api_response(
+                            ResponseStatus.ERROR,
+                            ResponseStatusCode.NOT_FOUND,
+                            "Không có map team cho UUID này (gọi GET teams để tạo map hoặc tạo team)",
+                        )
+                    pairs.append((k, str(tm.chatwoot_id)))
+                except ValueError:
+                    pairs.append((k, v))
+            elif k == "assignee_id":
+                try:
+                    agent_uuid = UUID(v)
+                    am = await _map_tenant_agent_by_local(db, tenant_id, agent_uuid)
+                    if not am:
+                        return api_response(
+                            ResponseStatus.ERROR,
+                            ResponseStatusCode.NOT_FOUND,
+                            "Không có map agent cho UUID này (gọi GET agents để tạo map hoặc tạo agent)",
+                        )
+                    pairs.append((k, str(am.chatwoot_id)))
+                except ValueError:
+                    pairs.append((k, v))
+            else:
+                pairs.append((k, v))
+
         res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/conversations",
