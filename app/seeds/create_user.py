@@ -16,8 +16,7 @@ async def seed_specific_permission(db: AsyncSession):
     if not permission:
         permission = Permission(
             name=permission_name,
-            description="Quyền xem chi tiết phòng ban theo ID",
-            created_at=datetime.datetime.now()
+            description="Quyền xem chi tiết phòng ban theo ID"
         )
         db.add(permission)
         await db.flush() # Lấy ID của permission mới mà chưa commit toàn bộ

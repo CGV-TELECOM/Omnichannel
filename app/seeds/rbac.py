@@ -1,8 +1,9 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Role, Permission, RolePermission, User, Levels, Tenant
+from app.db.models import Role, Permission, RolePermission, User, Levels, Tenant, ChatwootLegacyMap, ChatwootMapResourceType
 from app.core.security.password_utils import hash_password
 from sqlalchemy.future import select
 from uuid import UUID
+from app.integrations.chatwoot import client as chatwoot_client
 
 async def seed_rbac(db: AsyncSession):
     """
@@ -32,14 +33,18 @@ async def seed_rbac(db: AsyncSession):
         "delete_permission_from_role",
         "view_logs",
         "view_levels",
+        "view_level_by_id",
         "create_level",
         "edit_level",
         "delete_level",
         "view_departments",
+        "view_department_by_id",
         "create_department",
         "edit_department",
         "delete_department",
         "view_groups",
+        "view_group_by_id",
+        "view_group_detail_by_id",
         "create_group",
         "edit_group",
         "delete_group",
@@ -108,8 +113,6 @@ async def seed_rbac(db: AsyncSession):
         "create_tenant",
         "edit_tenant",
         "delete_tenant",
-        
-
     ]
     permissions = []
     for name in permission_names:
@@ -172,16 +175,21 @@ async def seed_rbac(db: AsyncSession):
         "view_user_groups",
         "delete_users",
         "view_levels",
+        "view_level_by_id",
         "view_departments",
+        "view_department_by_id",
         "create_department",
         "edit_department",
         "delete_department",
         "view_groups",
+        "view_group_by_id",
+        "view_group_detail_by_id",
         "create_group",
         "edit_group",
         "delete_group",
         "view_roles",
         "view_tags",
+        "view_tag_by_id",
         "create_tag",
         "edit_tag",
         # Ticket permissions
@@ -228,11 +236,15 @@ async def seed_rbac(db: AsyncSession):
 
     # Step 5: Create an admin user if they don't exist
     super_admin_level = next((l for l in created_levels if l.name == "Admin"), None)
-    await _create_admin_user(db, admin_role, super_admin_level)
+    admin_user = await _create_admin_user(db, admin_role, super_admin_level)
 
     # Step 6: Create a regular user.
     user_level = next((l for l in created_levels if l.name == "User"), None)
     await _create_regular_user(db, user_role, user_level)
+
+    # Step 7: Create default Chatwoot mappings for Tenant and Admin
+    await _seed_chatwoot_mappings(db, default_tenant, admin_user)
+
     print("✅ Seed RBAC thành công!")
 
 async def _get_or_create_role(db: AsyncSession, role_name: str, description: str, role_order: int, tenant_id: UUID | None = None) -> Role:
@@ -361,7 +373,11 @@ async def _get_or_create_tenant(db: AsyncSession, name: str, description: str) -
             tenant = Tenant(
                 name=name,
                 description=description,
-                is_active=1
+                is_active=1,
+                graph_activated=1,
+                agent_id=UUID("b10add77-0a1b-4974-9411-15ff68de61cd"),
+                graph_id=UUID("b10add77-0a1b-4974-9411-15ff68de61cd"),
+                meta_data={"chatbot_enabled": True, "default_responder": "bot"}
             )
             db.add(tenant)
             await db.commit()
@@ -370,3 +386,82 @@ async def _get_or_create_tenant(db: AsyncSession, name: str, description: str) -
     except Exception as e:
         print(f"Warning: Could not create tenant: {e}")
         return None
+
+async def _seed_chatwoot_mappings(db: AsyncSession, default_tenant: Tenant | None, admin_user: User):
+    """
+    Seeds default chatwoot mappings for multi-tenant and SSO functionality.
+    Queries Chatwoot API dynamically using the configured CHATWOOT_USER_API_TOKEN.
+    """
+    if not default_tenant:
+        return
+        
+    chatwoot_user_id = None
+    chatwoot_account_id = None
+    
+    # Try querying Chatwoot API dynamically first
+    try:
+        res = await chatwoot_client.application_request("GET", "/api/v1/profile")
+        if res.status_code == 200 and isinstance(res.data, dict):
+            chatwoot_user_id = res.data.get("id")
+            accounts = res.data.get("accounts")
+            if accounts and isinstance(accounts, list) and len(accounts) > 0:
+                chatwoot_account_id = accounts[0].get("id")
+    except Exception as e:
+        print(f"Warning: Could not connect to Chatwoot to fetch profile: {e}")
+        
+    # Fallback to defaults (Account 1, User 1) if not set or dynamic fetch fails
+    if chatwoot_user_id is None:
+        chatwoot_user_id = 1
+    if chatwoot_account_id is None:
+        chatwoot_account_id = 1
+        
+    print(f"Mapping local entities to Chatwoot: Account ID {chatwoot_account_id}, User ID {chatwoot_user_id}")
+    
+    # 1. Map Tenant to Chatwoot Account
+    stmt_acc = select(ChatwootLegacyMap).filter_by(
+        resource_type=ChatwootMapResourceType.ACCOUNT,
+        local_uuid=default_tenant.id
+    )
+    result_acc = await db.execute(stmt_acc)
+    mapping_acc = result_acc.scalar_one_or_none()
+    if not mapping_acc:
+        mapping_acc = ChatwootLegacyMap(
+            resource_type=ChatwootMapResourceType.ACCOUNT,
+            local_uuid=default_tenant.id,
+            chatwoot_id=chatwoot_account_id
+        )
+        db.add(mapping_acc)
+        
+    # 2. Map Admin User to Chatwoot User
+    stmt_usr = select(ChatwootLegacyMap).filter_by(
+        resource_type=ChatwootMapResourceType.USER,
+        local_uuid=admin_user.id
+    )
+    result_usr = await db.execute(stmt_usr)
+    mapping_usr = result_usr.scalar_one_or_none()
+    if not mapping_usr:
+        mapping_usr = ChatwootLegacyMap(
+            resource_type=ChatwootMapResourceType.USER,
+            local_uuid=admin_user.id,
+            chatwoot_id=chatwoot_user_id
+        )
+        db.add(mapping_usr)
+        
+    # 3. Map Admin User to Chatwoot Agent under the default tenant
+    stmt_agt = select(ChatwootLegacyMap).filter_by(
+        resource_type=ChatwootMapResourceType.AGENT,
+        local_uuid=admin_user.id,
+        tenant_id=default_tenant.id
+    )
+    result_agt = await db.execute(stmt_agt)
+    mapping_agt = result_agt.scalar_one_or_none()
+    if not mapping_agt:
+        mapping_agt = ChatwootLegacyMap(
+            resource_type=ChatwootMapResourceType.AGENT,
+            local_uuid=admin_user.id,
+            chatwoot_id=chatwoot_user_id,
+            tenant_id=default_tenant.id
+        )
+        db.add(mapping_agt)
+        
+    await db.commit()

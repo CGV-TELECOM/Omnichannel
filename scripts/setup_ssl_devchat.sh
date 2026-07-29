@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Script để cài đặt SSL certificate cho devomi.telesip.vn
+# Script để cài đặt SSL certificate cho devchat.telesip.vn
 # Sử dụng Let's Encrypt với certbot
 
-DOMAIN="devomi.telesip.vn"
-EMAIL="admin@telesip.vn"  # Thay đổi email của bạn
-NGINX_CONF="/root/backend-onmihub/nginx/devomi.telesip.vn.conf"
+DOMAIN="devchat.telesip.vn"
+EMAIL="admin@telesip.vn"
+NGINX_CONF="/root/backend-onmihub/nginx/devchat.telesip.vn.conf"
 NGINX_SITES_DIR="/etc/nginx/sites-available"
 NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
 
@@ -32,13 +32,12 @@ fi
 # Xác định user nginx (có thể là www-data hoặc nginx)
 NGINX_USER=$(ps aux | grep '[n]ginx: master' | awk '{print $1}' | head -n1)
 if [ -z "$NGINX_USER" ]; then
-    # Fallback: kiểm tra user nào có quyền truy cập nginx
     if id "www-data" &>/dev/null; then
         NGINX_USER="www-data"
     elif id "nginx" &>/dev/null; then
         NGINX_USER="nginx"
     else
-        NGINX_USER="www-data"  # Default cho Ubuntu
+        NGINX_USER="www-data"
     fi
 fi
 
@@ -53,7 +52,7 @@ chmod -R 755 /var/www/certbot
 echo "Đang tạo cấu hình Nginx tạm thời..."
 
 # Tạo cấu hình tạm thời chỉ HTTP
-cat > /tmp/nginx_temp.conf <<EOF
+cat > /tmp/${DOMAIN}_http_temp.conf <<EOF
 server {
     listen 80;
     listen [::]:80;
@@ -64,7 +63,7 @@ server {
     }
 
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:3010;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -78,7 +77,7 @@ if [ ! -d "$NGINX_SITES_DIR" ]; then
     mkdir -p "$NGINX_SITES_DIR"
 fi
 
-cp /tmp/nginx_temp.conf "$NGINX_SITES_DIR/$DOMAIN"
+cp /tmp/${DOMAIN}_http_temp.conf "$NGINX_SITES_DIR/$DOMAIN"
 
 # Tạo symlink vào sites-enabled
 if [ ! -d "$NGINX_ENABLED_DIR" ]; then
