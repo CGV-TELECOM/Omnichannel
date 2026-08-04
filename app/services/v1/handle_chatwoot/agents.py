@@ -48,7 +48,7 @@ async def list_agents(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -64,7 +64,7 @@ async def list_agents(
                 return api_response(
                     ResponseStatus.SUCCESS,
                     ResponseStatusCode.OK,
-                    "Danh sách agent Chatwoot",
+                    "Danh sách agent messaging",
                     {"tenant_id": str(tenant_id), "agents": data},
                 )
             public: list[dict[str, Any]] = []
@@ -83,13 +83,13 @@ async def list_agents(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Danh sách agent Chatwoot",
+                "Danh sách agent messaging",
                 {"tenant_id": str(tenant_id), "agents": public},
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 403, 404, 503) else 502,
-            "Không lấy được danh sách agent từ Chatwoot",
+            "Không lấy được danh sách agent từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -128,7 +128,7 @@ async def create_agent(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         payload = _application_agent_payload(body)
@@ -148,7 +148,7 @@ async def create_agent(
                 return api_response(
                     ResponseStatus.ERROR,
                     502,
-                    "Chatwoot trả agent không có id hợp lệ",
+                    "Messaging trả agent không có id hợp lệ",
                     _chatwoot_error_payload(res, sent_payload_keys=sorted(payload.keys(), key=str)),
                 )
             m = await _ensure_tenant_agent_map(db, tenant_id, cw_id)
@@ -156,7 +156,7 @@ async def create_agent(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã thêm agent trên Chatwoot",
+                "Đã thêm agent trên messaging",
                 {
                     "tenant_id": str(tenant_id),
                     "agent": _chatwoot_agent_public(data, m.local_uuid),
@@ -165,7 +165,7 @@ async def create_agent(
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 403, 404, 503) else 502,
-            "Thêm agent trên Chatwoot thất bại",
+            "Thêm agent trên messaging thất bại",
             _chatwoot_error_payload(res, sent_payload_keys=sorted(payload.keys(), key=str)),
         )
     except SQLAlchemyError as e:
@@ -203,7 +203,7 @@ async def update_agent(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         m = await _map_tenant_agent_by_local(db, tenant_id, agent_id)
@@ -228,7 +228,7 @@ async def update_agent(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã cập nhật agent trên Chatwoot",
+                "Đã cập nhật agent trên messaging",
                 {
                     "tenant_id": str(tenant_id),
                     "agent": _chatwoot_agent_public(data, m.local_uuid),
@@ -274,7 +274,7 @@ async def delete_agent(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         m = await _map_tenant_agent_by_local(db, tenant_id, agent_id)
@@ -297,7 +297,7 @@ async def delete_agent(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã xóa agent khỏi account Chatwoot",
+                "Đã xóa agent khỏi account messaging",
                 {"tenant_id": str(tenant_id), "removed_agent_id": str(agent_id)},
             )
         return api_response(

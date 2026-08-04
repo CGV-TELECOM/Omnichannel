@@ -104,7 +104,7 @@ async def create_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Tenant của user chưa có map Chatwoot account",
+                "Tenant của user chưa có map messaging account",
             )
 
         exists = await _map_user_by_local(db, user_id)
@@ -112,8 +112,8 @@ async def create_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.CONFLICT,
-                "User đã có map Chatwoot",
-                {"chatwoot_user_id": exists.chatwoot_id},
+                "User đã có map messaging",
+                {"messaging_user_id": exists.chatwoot_id},
             )
 
         core = _normalize_user_payload_for_agent(
@@ -131,7 +131,7 @@ async def create_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.BAD_REQUEST,
-                "Thiếu name/email để tạo user Chatwoot",
+                "Thiếu name/email để tạo user messaging",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -149,7 +149,7 @@ async def create_user(
                 return api_response(
                     ResponseStatus.ERROR,
                     502,
-                    "Chatwoot trả user không có id hợp lệ",
+                    "Messaging trả user không có id hợp lệ",
                     _chatwoot_error_payload(
                         res, sent_payload_keys=sorted(merged.keys(), key=str)
                     ),
@@ -166,13 +166,13 @@ async def create_user(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã tạo user trên Chatwoot",
+                "Đã tạo user trên messaging",
                 {"user": _chatwoot_user_public(data, m.local_uuid)},
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 409, 422, 503) else 502,
-            "Tạo user trên Chatwoot thất bại",
+            "Tạo user trên messaging thất bại",
             _chatwoot_error_payload(res, sent_payload_keys=sorted(merged.keys(), key=str)),
         )
     except SQLAlchemyError as e:
@@ -215,14 +215,14 @@ async def get_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Tenant của user chưa có map Chatwoot account",
+                "Tenant của user chưa có map messaging account",
             )
         m = await _map_user_by_local(db, user_id)
         if not m:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map user Chatwoot cho UUID này",
+                "Không có map user messaging cho UUID này",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
@@ -234,13 +234,13 @@ async def get_user(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Lấy thông tin user Chatwoot thành công",
+                "Lấy thông tin user messaging thành công",
                 {"user": _chatwoot_user_public(res.data, m.local_uuid)},
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Không lấy được user từ Chatwoot",
+            "Không lấy được user từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -282,14 +282,14 @@ async def update_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Tenant của user chưa có map Chatwoot account",
+                "Tenant của user chưa có map messaging account",
             )
         m = await _map_user_by_local(db, user_id)
         if not m:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map user Chatwoot cho UUID này",
+                "Không có map user messaging cho UUID này",
             )
         payload = _normalize_user_payload_for_agent(
             dict(body.model_dump(mode="json", exclude_unset=True, exclude_none=True)),
@@ -327,13 +327,13 @@ async def update_user(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã cập nhật user trên Chatwoot",
+                "Đã cập nhật user trên messaging",
                 {"user": _chatwoot_user_public(res.data, m.local_uuid)},
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 422, 503) else 502,
-            "Cập nhật user trên Chatwoot thất bại",
+            "Cập nhật user trên messaging thất bại",
             _chatwoot_error_payload(res, sent_payload_keys=sorted(merged.keys(), key=str)),
         )
     except SQLAlchemyError as e:
@@ -374,14 +374,14 @@ async def delete_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Tenant của user chưa có map Chatwoot account",
+                "Tenant của user chưa có map messaging account",
             )
         m = await _map_user_by_local(db, user_id)
         if not m:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map user Chatwoot cho UUID này",
+                "Không có map user messaging cho UUID này",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
@@ -395,13 +395,13 @@ async def delete_user(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã xóa user trên Chatwoot",
+                "Đã xóa user trên messaging",
                 {"removed_user_id": str(user_id)},
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Xóa user trên Chatwoot thất bại",
+            "Xóa user trên messaging thất bại",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -438,7 +438,7 @@ async def get_user_sso_link(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map user Chatwoot cho UUID này",
+                "Không có map user messaging cho UUID này",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.platform_request(
@@ -456,7 +456,7 @@ async def get_user_sso_link(
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 422, 503) else 502,
-            "Không lấy được user SSO link từ Chatwoot",
+            "Không lấy được user SSO link từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:

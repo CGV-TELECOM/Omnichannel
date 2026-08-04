@@ -47,7 +47,7 @@ async def get_group_by_id(
     group_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
-    _ = Depends(has_permission("view_group_by_id"))
+    _ = Depends(has_permission("view_groups"))
 ):
     return await handle_group.get_group_by_id(group_id, db, current_user)
 
@@ -91,7 +91,7 @@ async def get_group_detail(
     group_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
-    _ = Depends(has_permission("view_group_detail_by_id"))
+    _ = Depends(has_permission("view_groups"))
 ):
     return await handle_group.get_group_detail(group_id, db, current_user)
 

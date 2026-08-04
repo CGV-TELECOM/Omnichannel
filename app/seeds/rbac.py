@@ -2,8 +2,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Role, Permission, RolePermission, User, Levels, Tenant, ChatwootLegacyMap, ChatwootMapResourceType
 from app.core.security.password_utils import hash_password
 from sqlalchemy.future import select
+from sqlalchemy import delete
 from uuid import UUID
 from app.integrations.chatwoot import client as chatwoot_client
+
+# Permission cũ dạng view detail by id — đã gộp vào view_* (list + detail).
+OBSOLETE_PERMISSION_NAMES = frozenset({
+    "view_level_by_id",
+    "view_department_by_id",
+    "view_group_by_id",
+    "view_group_detail_by_id",
+    "view_tag_by_id",
+    "view_ticket_flow_by_id",
+    "view_ticket_flow_instance_by_id",
+    "view_ticket_flow_step_by_id",
+    "view_customer_by_id",
+    "view_roles_by_id",
+    "view_permissions_by_id",
+    # Gộp vào group / roles
+    "view_user_groups",
+    "delete_user_group",
+    "view_role_permissions_by_role_id",
+})
+
 
 async def seed_rbac(db: AsyncSession):
     """
@@ -12,7 +33,9 @@ async def seed_rbac(db: AsyncSession):
     """
     # Step 0: Create a default tenant if it doesn't exist (optional, for multi-tenant support)
     default_tenant = await _get_or_create_tenant(db, "Default Tenant", "Default tenant for seed data")
-    
+
+    # Step 0.5: Xóa permission by-id đã gộp + gỡ gán role
+    await _purge_obsolete_permissions(db)
     # Step 1: Create permissions if they don't exist
     permission_names = [
         "view_users",
@@ -20,7 +43,6 @@ async def seed_rbac(db: AsyncSession):
         "delete_users",
         "create_users",
         "edit_users",
-        "view_user_groups",
         "edit_roles",
         "view_roles",
         "delete_roles",
@@ -33,26 +55,19 @@ async def seed_rbac(db: AsyncSession):
         "delete_permission_from_role",
         "view_logs",
         "view_levels",
-        "view_level_by_id",
         "create_level",
         "edit_level",
         "delete_level",
         "view_departments",
-        "view_department_by_id",
         "create_department",
         "edit_department",
         "delete_department",
         "view_groups",
-        "view_group_by_id",
-        "view_group_detail_by_id",
         "create_group",
         "edit_group",
         "delete_group",
         "assign_user_to_group",
-        "delete_user_group",
-        "view_role_permissions_by_role_id",
         "view_tags",
-        "view_tag_by_id",
         "create_tag",
         "edit_tag",
         "delete_tag",
@@ -81,25 +96,21 @@ async def seed_rbac(db: AsyncSession):
         "delete_ticket_extension",
         # Ticket Flow permissions
         "view_ticket_flows",
-        "view_ticket_flow_by_id",
         "create_ticket_flow",
         "edit_ticket_flow",
         "delete_ticket_flow",
         # Ticket Flow Instance permissions
         "view_ticket_flow_instances",
-        "view_ticket_flow_instance_by_id",
         "create_ticket_flow_instance",
         "edit_ticket_flow_instance",
         "delete_ticket_flow_instance",
         # Ticket Flow Step permissions
         "view_ticket_flow_steps",
-        "view_ticket_flow_step_by_id",
         "create_ticket_flow_step",
         "edit_ticket_flow_step",
         "delete_ticket_flow_step",
         # Customer permissions
         "view_customers",
-        "view_customer_by_id",
         "create_customer",
         "edit_customer",
         "delete_customer",
@@ -113,6 +124,48 @@ async def seed_rbac(db: AsyncSession):
         "create_tenant",
         "edit_tenant",
         "delete_tenant",
+        # Messaging (omnichannel) — public API /messaging/*
+        "view_messaging_accounts",
+        "create_messaging_account",
+        "edit_messaging_account",
+        "delete_messaging_account",
+        "sync_messaging_integration",
+        "view_messaging_conversations",
+        "create_messaging_conversation",
+        "edit_messaging_conversation",
+        "delete_messaging_conversation",
+        "send_messaging_message",
+        "delete_messaging_message",
+        "assign_messaging_conversation",
+        "view_messaging_inboxes",
+        "create_messaging_inbox",
+        "edit_messaging_inbox",
+        "manage_messaging_inbox_members",
+        "view_messaging_labels",
+        "create_messaging_label",
+        "delete_messaging_label",
+        "bulk_messaging_actions",
+        "view_messaging_custom_filters",
+        "create_messaging_custom_filter",
+        "edit_messaging_custom_filter",
+        "delete_messaging_custom_filter",
+        "view_messaging_agents",
+        "create_messaging_agent",
+        "edit_messaging_agent",
+        "delete_messaging_agent",
+        "view_messaging_teams",
+        "create_messaging_team",
+        "edit_messaging_team",
+        "delete_messaging_team",
+        "manage_messaging_team_members",
+        "view_messaging_agent_bots",
+        "create_messaging_agent_bot",
+        "edit_messaging_agent_bot",
+        "delete_messaging_agent_bot",
+        "view_messaging_users",
+        "create_messaging_user",
+        "edit_messaging_user",
+        "delete_messaging_user",
     ]
     permissions = []
     for name in permission_names:
@@ -121,11 +174,12 @@ async def seed_rbac(db: AsyncSession):
         # Dữ liệu cũ có thể đã bị trùng name, không dùng scalar_one_or_none để tránh crash startup.
         permission = result.scalars().first()
         if not permission:
+            belong_to = "messaging" if "messaging" in name else "system"
             permission = Permission(
                 name=name, 
                 description=f"Permission to {name}",
                 tenant_id=default_tenant.id if default_tenant else None,
-                belong_to="system"
+                belong_to=belong_to,
             )
             db.add(permission)
             await db.commit()
@@ -163,33 +217,31 @@ async def seed_rbac(db: AsyncSession):
             await db.refresh(level)
         created_levels.append(level)
 
-    # Step 4: Assign permissions to roles
-    await _assign_permissions_to_role(db, admin_role, permissions)
+    # Step 4: Assign permissions to roles (mọi role tên admin; gán đủ permission gồm messaging)
+    all_admin_roles = (await db.execute(select(Role).where(Role.name == "admin"))).scalars().all()
+    if not all_admin_roles:
+        all_admin_roles = [admin_role]
+    for role in all_admin_roles:
+        await _assign_permissions_to_role(db, role, permissions)
 
-    # Assign some permissions to the "user" role.  Adjust as needed for your application.
+    # Assign some permissions to the "user" role (và mọi role tên user).
     user_permissions = [
         "current_user",  # Example:  Users can view items.
         "create_users",
         "edit_users",
         "view_users",
-        "view_user_groups",
         "delete_users",
         "view_levels",
-        "view_level_by_id",
         "view_departments",
-        "view_department_by_id",
         "create_department",
         "edit_department",
         "delete_department",
         "view_groups",
-        "view_group_by_id",
-        "view_group_detail_by_id",
         "create_group",
         "edit_group",
         "delete_group",
         "view_roles",
         "view_tags",
-        "view_tag_by_id",
         "create_tag",
         "edit_tag",
         # Ticket permissions
@@ -207,22 +259,18 @@ async def seed_rbac(db: AsyncSession):
         "create_ticket_extension",
         # Ticket Flow permissions
         "view_ticket_flows",
-        "view_ticket_flow_by_id",
         "create_ticket_flow",
         "edit_ticket_flow",
         # Ticket Flow Instance permissions
         "view_ticket_flow_instances",
-        "view_ticket_flow_instance_by_id",
         "create_ticket_flow_instance",
         "edit_ticket_flow_instance",
         # Ticket Flow Step permissions
         "view_ticket_flow_steps",
-        "view_ticket_flow_step_by_id",
         "create_ticket_flow_step",
         "edit_ticket_flow_step",
         # Customer (user thường chỉ được xem/tạo/sửa, KHÔNG được xóa)
         "view_customers",
-        "view_customer_by_id",
         "create_customer",
         "edit_customer",
         # Customer Provided Info (user thường chỉ được xem/tạo/sửa, KHÔNG được xóa)
@@ -230,9 +278,36 @@ async def seed_rbac(db: AsyncSession):
         "create_customer_provided_info",
         "edit_customer_provided_info",
         "view_tenants",
+        # Messaging — agent: view/create/edit; admin-only delete / provision / sync
+        "view_messaging_accounts",
+        "view_messaging_conversations",
+        "create_messaging_conversation",
+        "edit_messaging_conversation",
+        "send_messaging_message",
+        "assign_messaging_conversation",
+        "view_messaging_inboxes",
+        "view_messaging_labels",
+        "create_messaging_label",
+        "bulk_messaging_actions",
+        "view_messaging_custom_filters",
+        "create_messaging_custom_filter",
+        "edit_messaging_custom_filter",
+        "view_messaging_agents",
+        "view_messaging_teams",
+        "create_messaging_team",
+        "edit_messaging_team",
+        "manage_messaging_team_members",
+        "view_messaging_agent_bots",
+        "view_messaging_users",
+        "create_messaging_user",
+        "edit_messaging_user",
     ]
     user_permissions_objects = [p for p in permissions if p.name in user_permissions]
-    await _assign_permissions_to_role(db, user_role, user_permissions_objects)
+    all_user_roles = (await db.execute(select(Role).where(Role.name == "user"))).scalars().all()
+    if not all_user_roles:
+        all_user_roles = [user_role]
+    for role in all_user_roles:
+        await _assign_permissions_to_role(db, role, user_permissions_objects)
 
     # Step 5: Create an admin user if they don't exist
     super_admin_level = next((l for l in created_levels if l.name == "Admin"), None)
@@ -246,6 +321,36 @@ async def seed_rbac(db: AsyncSession):
     await _seed_chatwoot_mappings(db, default_tenant, admin_user)
 
     print("✅ Seed RBAC thành công!")
+
+
+async def _purge_obsolete_permissions(db: AsyncSession) -> None:
+    """
+    Xóa permission obsolete đã gộp (view_*_by_id, user_group → group, role-permissions → view_roles)
+    và các RolePermission liên quan.
+    """
+    result = await db.execute(
+        select(Permission).where(Permission.name.in_(OBSOLETE_PERMISSION_NAMES))
+    )
+    obsolete = list(result.scalars().all())
+    if not obsolete:
+        print("ℹ️  Không có permission obsolete cần xóa.")
+        return
+
+    perm_ids = [p.id for p in obsolete]
+    names = [p.name for p in obsolete]
+
+    del_rp = await db.execute(
+        delete(RolePermission).where(RolePermission.permission_id.in_(perm_ids))
+    )
+    del_p = await db.execute(
+        delete(Permission).where(Permission.id.in_(perm_ids))
+    )
+    await db.commit()
+    print(
+        f"🗑️  Đã xóa {del_p.rowcount} permission obsolete "
+        f"và {del_rp.rowcount} role_permission: {', '.join(names)}"
+    )
+
 
 async def _get_or_create_role(db: AsyncSession, role_name: str, description: str, role_order: int, tenant_id: UUID | None = None) -> Role:
     """

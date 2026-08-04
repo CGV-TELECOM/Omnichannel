@@ -1,4 +1,4 @@
-"""HTTP client gọi Chatwoot Platform API và Application API."""
+"""HTTP client gọi messaging Platform API và Application API."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ _RAW_PREVIEW_LOG = 3500
 
 @dataclass(frozen=True, slots=True)
 class ChatwootResult:
-    """Kết quả HTTP từ Chatwoot (luôn giữ body thô để debug Rails/nginx)."""
+    """Kết quả HTTP từ messaging (luôn giữ body thô để debug Rails/nginx)."""
 
     status_code: int
     data: Any
@@ -42,7 +42,7 @@ async def _request(
     if not token:
         return ChatwootResult(
             401,
-            {"description": "Thiếu api_access_token Chatwoot"},
+            {"description": "Thiếu api_access_token messaging"},
             "",
             path,
         )
@@ -63,7 +63,7 @@ async def _request(
             500,
             {
                 "description": (
-                    "CHATWOOT_BASE_URL hoặc token chứa ký tự không hợp lệ cho HTTP "
+                    "URL hoặc token messaging chứa ký tự không hợp lệ cho HTTP "
                     "(thường do copy dấu gạch đặc biệt vào .env)."
                 ),
                 "detail": str(exc),
@@ -84,7 +84,7 @@ async def _request(
 
     if r.status_code >= 400:
         logger.warning(
-            "Chatwoot %s %s HTTP %s | response preview: %s",
+            "Messaging %s %s HTTP %s | response preview: %s",
             method,
             path,
             r.status_code,

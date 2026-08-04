@@ -21,11 +21,11 @@ router = APIRouter()
 @router.get("/agent-bots")
 async def list_all_chatwoot_agent_bots(
     request: Request,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("view_messaging_agent_bots")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """Platform API: danh sách mọi AgentBot trên instance Chatwoot (xem developers.chatwoot.com AgentBots)."""
+    """Platform API: danh sách mọi AgentBot trên instance messaging."""
     return await handle_chatwoot.list_all_agent_bots(request, current_user, db)
 
 
@@ -33,7 +33,7 @@ async def list_all_chatwoot_agent_bots(
 async def list_tenant_chatwoot_agent_bots(
     request: Request,
     tenant_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("view_messaging_agent_bots")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -48,7 +48,7 @@ async def create_chatwoot_agent_bot(
     request: Request,
     tenant_id: UUID,
     body: ChatwootAgentBotCreateBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("create_messaging_agent_bot")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -62,7 +62,7 @@ async def get_chatwoot_agent_bot(
     request: Request,
     tenant_id: UUID,
     bot_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("view_messaging_agent_bots")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -78,7 +78,7 @@ async def update_chatwoot_agent_bot(
     tenant_id: UUID,
     bot_id: UUID,
     body: ChatwootAgentBotUpdateBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("edit_messaging_agent_bot")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -93,7 +93,7 @@ async def delete_chatwoot_agent_bot(
     request: Request,
     tenant_id: UUID,
     bot_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("delete_messaging_agent_bot")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -106,6 +106,7 @@ async def delete_chatwoot_agent_bot(
 async def list_tenant_account_agent_bots(
     request: Request,
     tenant_id: UUID,
+    _=Depends(has_permission("view_messaging_agent_bots")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -120,6 +121,7 @@ async def create_tenant_account_agent_bot(
     request: Request,
     tenant_id: UUID,
     body: ChatwootApplicationJsonBody,
+    _=Depends(has_permission("create_messaging_agent_bot")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -133,6 +135,7 @@ async def get_tenant_account_agent_bot(
     request: Request,
     tenant_id: UUID,
     agent_bot_id: int,
+    _=Depends(has_permission("view_messaging_agent_bots")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -148,6 +151,7 @@ async def update_tenant_account_agent_bot(
     tenant_id: UUID,
     agent_bot_id: int,
     body: ChatwootApplicationJsonBody,
+    _=Depends(has_permission("edit_messaging_agent_bot")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -162,6 +166,7 @@ async def delete_tenant_account_agent_bot(
     request: Request,
     tenant_id: UUID,
     agent_bot_id: int,
+    _=Depends(has_permission("delete_messaging_agent_bot")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):

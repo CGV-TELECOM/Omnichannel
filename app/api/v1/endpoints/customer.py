@@ -66,7 +66,7 @@ async def get_customer_by_id(
     customer_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
-    _=Depends(has_permission("view_customer_by_id")),
+    _=Depends(has_permission("view_customers")),
 ):
     """
     Lấy thông tin chi tiết một khách hàng theo ID.
@@ -147,7 +147,7 @@ async def get_customer_tags(
     customer_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
-    _=Depends(has_permission("view_customer_by_id")),
+    _=Depends(has_permission("view_customers")),
 ):
     """
     Lấy danh sách tag (type=CUSTOMER) gán cho một khách hàng.

@@ -18,7 +18,7 @@ router = APIRouter()
 async def list_chatwoot_agents(
     request: Request,
     tenant_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("view_messaging_agents")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -31,7 +31,7 @@ async def create_chatwoot_agent(
     request: Request,
     tenant_id: UUID,
     body: ChatwootAgentCreateBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("create_messaging_agent")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -47,7 +47,7 @@ async def update_chatwoot_agent(
     tenant_id: UUID,
     agent_id: UUID,
     body: ChatwootAgentUpdateBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("edit_messaging_agent")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -62,7 +62,7 @@ async def delete_chatwoot_agent(
     request: Request,
     tenant_id: UUID,
     agent_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("delete_messaging_agent")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):

@@ -23,7 +23,7 @@ async def get_role_permissions(
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
-    _ = Depends(has_permission("view_role_permissions_by_role_id"))
+    _ = Depends(has_permission("view_roles"))
 ):
 
     return await handle_role_permission.get_role_permissions(role_id, db, current_user)

@@ -31,6 +31,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _chatwoot_agent_public,
     _agents_payload_as_list,
     _map_tenant_team_by_local,
+    _translate_local_agent_uuids_to_remote,
 )
 
 
@@ -86,7 +87,7 @@ async def list_teams(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -101,7 +102,7 @@ async def list_teams(
                 return api_response(
                     ResponseStatus.SUCCESS,
                     ResponseStatusCode.OK,
-                    "Danh sách team Chatwoot",
+                    "Danh sách team messaging",
                     {"tenant_id": str(tenant_id), "teams": data},
                 )
             public_teams = []
@@ -120,13 +121,13 @@ async def list_teams(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Danh sách team Chatwoot",
+                "Danh sách team messaging",
                 {"tenant_id": str(tenant_id), "teams": public_teams},
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 403, 404, 503) else 502,
-            "Không lấy được danh sách team từ Chatwoot",
+            "Không lấy được danh sách team từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -162,7 +163,7 @@ async def create_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         payload = body.model_dump(exclude_none=True)
@@ -181,7 +182,7 @@ async def create_team(
                 return api_response(
                     ResponseStatus.ERROR,
                     502,
-                    "Chatwoot trả team không có id hợp lệ",
+                    "Messaging trả team không có id hợp lệ",
                     _chatwoot_error_payload(res, sent_payload_keys=sorted(payload.keys(), key=str)),
                 )
             m = await _ensure_tenant_team_map(db, tenant_id, cw_id)
@@ -189,7 +190,7 @@ async def create_team(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã tạo team trên Chatwoot",
+                "Đã tạo team trên messaging",
                 {
                     "tenant_id": str(tenant_id),
                     "team": _chatwoot_team_public(data, m.local_uuid),
@@ -234,7 +235,7 @@ async def get_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -265,7 +266,7 @@ async def get_team(
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 403, 404, 503) else 502,
-            "Không lấy được Team từ Chatwoot",
+            "Không lấy được Team từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -300,7 +301,7 @@ async def update_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -331,7 +332,7 @@ async def update_team(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã cập nhật Team trên Chatwoot",
+                "Đã cập nhật Team trên messaging",
                 {
                     "tenant_id": str(tenant_id),
                     "team": _chatwoot_team_public(data, m.local_uuid),
@@ -374,7 +375,7 @@ async def delete_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -397,7 +398,7 @@ async def delete_team(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã xóa Team trên Chatwoot",
+                "Đã xóa Team trên messaging",
                 {"tenant_id": str(tenant_id), "removed_team_id": str(team_id)},
             )
         return api_response(
@@ -437,7 +438,7 @@ async def list_team_members(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -461,7 +462,7 @@ async def list_team_members(
                 return api_response(
                     ResponseStatus.SUCCESS,
                     ResponseStatusCode.OK,
-                    "Danh sách thành viên team Chatwoot",
+                    "Danh sách thành viên team messaging",
                     {"tenant_id": str(tenant_id), "team_id": str(team_id), "members": data},
                 )
             public_members = []
@@ -480,13 +481,13 @@ async def list_team_members(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Danh sách thành viên team Chatwoot",
+                "Danh sách thành viên team messaging",
                 {"tenant_id": str(tenant_id), "team_id": str(team_id), "members": public_members},
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 403, 404, 503) else 502,
-            "Không lấy được danh sách thành viên team từ Chatwoot",
+            "Không lấy được danh sách thành viên team từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -503,32 +504,6 @@ async def list_team_members(
             ResponseStatusCode.INTERNAL_SERVER_ERROR,
             f"Lỗi không xác định: {e}",
         )
-
-
-async def _translate_local_agent_uuids_to_chatwoot(
-    db: AsyncSession, tenant_id: UUID, local_uuids: list[UUID]
-) -> tuple[list[int], list[str]]:
-    if not local_uuids:
-        return [], []
-    q = await db.execute(
-        select(ChatwootLegacyMap).where(
-            and_(
-                ChatwootLegacyMap.resource_type == ChatwootMapResourceType.AGENT,
-                ChatwootLegacyMap.tenant_id == tenant_id,
-                ChatwootLegacyMap.local_uuid.in_(local_uuids),
-            )
-        )
-    )
-    rows = q.scalars().all()
-    found_map = {r.local_uuid: r.chatwoot_id for r in rows}
-    found_ids = []
-    missing_uuids = []
-    for uid in local_uuids:
-        if uid in found_map:
-            found_ids.append(found_map[uid])
-        else:
-            missing_uuids.append(str(uid))
-    return found_ids, missing_uuids
 
 
 async def _modify_team_members(
@@ -551,7 +526,7 @@ async def _modify_team_members(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -562,7 +537,7 @@ async def _modify_team_members(
                 "Không có map Team cho UUID này",
             )
 
-        cw_agent_ids, missing_uuids = await _translate_local_agent_uuids_to_chatwoot(
+        cw_agent_ids, missing_uuids = await _translate_local_agent_uuids_to_remote(
             db, tenant_id, body.user_ids
         )
         if missing_uuids:

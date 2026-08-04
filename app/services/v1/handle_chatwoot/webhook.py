@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
     """
-    Xử lý Webhook gửi từ Chatwoot.
+    Xử lý Webhook gửi từ messaging.
     Tìm kiếm tenant tương ứng từ account_id và phát tin nhắn qua Socket.IO.
     """
     try:
@@ -31,7 +31,7 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
             account_id = payload.get("account_id")
 
         if not account_id:
-            logger.warning("Payload webhook của Chatwoot không có account ID: %s", payload)
+            logger.warning("Payload webhook của messaging không có account ID: %s", payload)
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.BAD_REQUEST,
@@ -50,7 +50,7 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
         mapping = q.scalar_one_or_none()
         if not mapping:
             logger.warning(
-                "Không tìm thấy tenant nội bộ tương ứng với Chatwoot account ID: %s",
+                "Không tìm thấy tenant nội bộ tương ứng với messaging account ID: %s",
                 account_id,
             )
             return api_response(
@@ -70,7 +70,7 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
 
         event_type = payload.get("event", "unknown_event")
         logger.info(
-            "Đang phát sự kiện Chatwoot '%s' tới tenant %s", event_type, tenant_id
+            "Đang phát sự kiện messaging '%s' tới tenant %s", event_type, tenant_id
         )
 
         # Ánh xạ agent ID trong payload sang UUID nội bộ
@@ -79,7 +79,7 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
 
         await socket_manager.send_to_tenant(
             tenant_id=tenant_id,
-            event="chatwoot_event",
+            event="messaging_event",
             data={"event": event_type, "payload": mapped_payload},
         )
 
@@ -157,7 +157,7 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
             {"tenant_id": str(tenant_id), "event": event_type},
         )
     except Exception as e:
-        logger.error("Lỗi khi xử lý webhook Chatwoot: %s", str(e))
+        logger.error("Lỗi khi xử lý webhook messaging: %s", str(e))
         return api_response(
             ResponseStatus.ERROR,
             ResponseStatusCode.INTERNAL_SERVER_ERROR,

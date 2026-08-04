@@ -26,9 +26,12 @@ from app.services.v1.handle_chatwoot._shared import (
     _delete_tenant_agent_and_bot_maps,
     _forward_all_query_pairs,
     _get_tenant_account_mapping,
+    _map_tenant_agent_by_local,
+    _map_tenant_team_by_local,
     _platform_account_payload_provision,
     _platform_account_payload_update,
     _resolve_account_id,
+    _translate_local_agent_uuids_to_remote,
     link_integration_user_to_chatwoot_account,
 )
 
@@ -65,8 +68,8 @@ async def provision_account(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Tenant đã được liên kết với Chatwoot account (bỏ qua tạo mới)",
-                {"tenant_id": str(body.tenant_id), "chatwoot_linked": True},
+                "Tenant đã được liên kết với messaging account (bỏ qua tạo mới)",
+                {"tenant_id": str(body.tenant_id), "messaging_linked": True},
             )
 
         payload = _platform_account_payload_provision(body)
@@ -86,12 +89,12 @@ async def provision_account(
             hint = (
                 " Gợi ý: locale (en, vi…); domain hợp lệ hoặc không gửi. "
                 "Key trong `features` phải là flag hợp lệ (unknown đã bị bỏ trước khi gửi). "
-                "Xem `raw_response_body_preview` và log Rails trên server Chatwoot."
+                "Xem `raw_response_body_preview` và log Rails trên server messaging."
             )
             if isinstance(data, dict) and int(data.get("status", 0) or 0) >= 500:
-                msg = "Chatwoot server báo lỗi nội bộ." + hint
+                msg = "Messaging server báo lỗi nội bộ." + hint
             else:
-                msg = "Chatwoot tạo account thất bại." + hint
+                msg = "Messaging tạo account thất bại." + hint
             detail = _chatwoot_error_payload(
                 res,
                 sent_payload_keys=sorted(payload.keys(), key=str),
@@ -112,12 +115,12 @@ async def provision_account(
                 )
             except Exception as delete_ex:
                 logger.error(
-                    "Lỗi khi xóa account Chatwoot %s sau khi liên kết thất bại: %s",
+                    "Lỗi khi xóa account messaging %s sau khi liên kết thất bại: %s",
                     chat_id,
                     str(delete_ex),
                 )
             await db.rollback()
-            msg = "Gắn user tích hợp vào Chatwoot account thất bại, đã rollback tạo doanh nghiệp"
+            msg = "Gắn user tích hợp vào messaging account thất bại, đã rollback tạo doanh nghiệp"
             if link_info.get("skipped_reason"):
                 msg += f". Lý do: {link_info.get('skipped_reason')}"
             return api_response(
@@ -151,20 +154,20 @@ async def provision_account(
                 )
                 if webhook_res.status_code in (200, 201):
                     logger.info(
-                        "Đã đăng ký webhook Chatwoot tự động thành công cho account %s: %s",
+                        "Đã đăng ký webhook messaging tự động thành công cho account %s: %s",
                         chat_id,
                         webhook_url,
                     )
                 else:
                     logger.warning(
-                        "Đăng ký webhook Chatwoot tự động thất bại cho account %s. Status: %s. Response: %s",
+                        "Đăng ký webhook messaging tự động thất bại cho account %s. Status: %s. Response: %s",
                         chat_id,
                         webhook_res.status_code,
                         webhook_res.raw_text,
                     )
             except Exception as e:
                 logger.error(
-                    "Lỗi khi tự động đăng ký webhook Chatwoot cho account %s: %s",
+                    "Lỗi khi tự động đăng ký webhook messaging cho account %s: %s",
                     chat_id,
                     str(e),
                 )
@@ -187,12 +190,12 @@ async def provision_account(
 
         success_data: dict[str, Any] = {
             "tenant_id": str(body.tenant_id),
-            "chatwoot_linked": True,
+            "messaging_linked": True,
         }
         if sanitize_meta:
             success_data["payload_sanitize_meta"] = sanitize_meta
         msg = (
-            "Đã tạo Chatwoot account và lưu map tenant. "
+            "Đã tạo messaging account và lưu map tenant. "
             "Đã gắn user tích hợp (Application API) vào account với role "
             f"{_INTEGRATION_ACCOUNT_USER_ROLE}."
         )
@@ -237,7 +240,7 @@ async def get_account(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -251,13 +254,13 @@ async def get_account(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Lấy thông tin Chatwoot account thành công",
-                {"tenant_id": str(tenant_id), "chatwoot_account": data},
+                "Lấy thông tin messaging account thành công",
+                {"tenant_id": str(tenant_id), "messaging_account": data},
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Không lấy được account từ Chatwoot",
+            "Không lấy được account từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -294,20 +297,20 @@ async def sync_integration_account_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         link_info = await link_integration_user_to_chatwoot_account(account_id)
         payload = {
             "tenant_id": str(tenant_id),
-            "chatwoot_account_id": account_id,
+            "messaging_account_id": account_id,
             "integration_account_user": link_info,
         }
         if link_info.get("linked"):
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã gắn user tích hợp vào account Chatwoot",
+                "Đã gắn user tích hợp vào account messaging",
                 payload,
             )
         if not link_info.get("attempted"):
@@ -320,7 +323,7 @@ async def sync_integration_account_user(
         return api_response(
             ResponseStatus.ERROR,
             502,
-            "Chatwoot từ chối gắn user tích hợp vào account",
+            "Messaging từ chối gắn user tích hợp vào account",
             payload,
         )
     except SQLAlchemyError as e:
@@ -367,7 +370,7 @@ async def update_account(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -391,14 +394,14 @@ async def update_account(
                 await db.commit()
             ok_data: dict[str, Any] = {
                 "tenant_id": str(tenant_id),
-                "chatwoot_account": data,
+                "messaging_account": data,
             }
             if sanitize_meta:
                 ok_data["payload_sanitize_meta"] = sanitize_meta
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Cập nhật Chatwoot account thành công",
+                "Cập nhật messaging account thành công",
                 ok_data,
             )
         err_detail = _chatwoot_error_payload(
@@ -409,7 +412,7 @@ async def update_account(
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Cập nhật Chatwoot account thất bại",
+            "Cập nhật messaging account thất bại",
             err_detail,
         )
     except SQLAlchemyError as e:
@@ -444,7 +447,7 @@ async def delete_account(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         account_id = mapping.chatwoot_id
@@ -458,7 +461,7 @@ async def delete_account(
             return api_response(
                 ResponseStatus.ERROR,
                 res.status_code if res.status_code in (401, 404, 503) else 502,
-                "Xóa account trên Chatwoot thất bại",
+                "Xóa account trên messaging thất bại",
                 _chatwoot_error_payload(res),
             )
 
@@ -468,8 +471,8 @@ async def delete_account(
         return api_response(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,
-            "Đã xóa Chatwoot account và bản ghi map",
-            {"tenant_id": str(tenant_id), "removed_chatwoot_account_id": account_id},
+            "Đã xóa messaging account và bản ghi map",
+            {"tenant_id": str(tenant_id), "removed_messaging_account_id": account_id},
         )
     except SQLAlchemyError as e:
         await db.rollback()
@@ -486,6 +489,107 @@ async def delete_account(
             f"Lỗi không xác định: {e}",
         )
 
+async def _build_bulk_action_payload(
+    body: ChatwootBulkActionLabelsBody,
+    db: AsyncSession,
+    tenant_id: UUID,
+) -> tuple[dict[str, Any] | None, Any]:
+    """
+    Build payload bulk_actions đúng shape Chatwoot:
+    - luôn: type, ids
+    - labels / fields chỉ khi có nội dung (không gửi {})
+    - fields.assignee_id: map UUID nội bộ → id remote nếu là UUID
+    - fields.team_id: map UUID team nội bộ → id remote nếu là UUID
+    """
+    payload: dict[str, Any] = {
+        "type": body.type,
+        "ids": list(body.ids),
+    }
+
+    if body.labels:
+        # bỏ key rỗng trong labels (add/remove)
+        labels = {k: v for k, v in body.labels.items() if v}
+        if labels:
+            payload["labels"] = labels
+
+    if body.fields:
+        fields = dict(body.fields)
+
+        # assignee_agent_uuid (alias) hoặc assignee_id dạng UUID nội bộ
+        assignee_uuid_raw = fields.pop("assignee_agent_uuid", None)
+        if assignee_uuid_raw is None and "assignee_id" in fields:
+            raw = fields.get("assignee_id")
+            if isinstance(raw, UUID) or (
+                isinstance(raw, str) and _looks_like_uuid(raw)
+            ):
+                assignee_uuid_raw = raw
+                fields.pop("assignee_id", None)
+
+        if assignee_uuid_raw is not None:
+            try:
+                assignee_uuid = (
+                    assignee_uuid_raw
+                    if isinstance(assignee_uuid_raw, UUID)
+                    else UUID(str(assignee_uuid_raw))
+                )
+            except (TypeError, ValueError):
+                return None, api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.BAD_REQUEST,
+                    "assignee_id / assignee_agent_uuid không hợp lệ",
+                )
+            m = await _map_tenant_agent_by_local(db, tenant_id, assignee_uuid)
+            if not m:
+                # fallback USER map
+                remote_ids, missing = await _translate_local_agent_uuids_to_remote(
+                    db, tenant_id, [assignee_uuid]
+                )
+                if missing or not remote_ids:
+                    return None, api_response(
+                        ResponseStatus.ERROR,
+                        ResponseStatusCode.NOT_FOUND,
+                        f"Không tìm thấy map agent cho UUID: {assignee_uuid}",
+                    )
+                fields["assignee_id"] = remote_ids[0]
+            else:
+                fields["assignee_id"] = int(m.chatwoot_id)
+
+        team_raw = fields.get("team_id")
+        if team_raw is not None and (
+            isinstance(team_raw, UUID)
+            or (isinstance(team_raw, str) and _looks_like_uuid(team_raw))
+        ):
+            try:
+                team_uuid = team_raw if isinstance(team_raw, UUID) else UUID(str(team_raw))
+            except (TypeError, ValueError):
+                return None, api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.BAD_REQUEST,
+                    "team_id không hợp lệ",
+                )
+            tm = await _map_tenant_team_by_local(db, tenant_id, team_uuid)
+            if not tm:
+                return None, api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.NOT_FOUND,
+                    f"Không tìm thấy map team cho UUID: {team_uuid}",
+                )
+            fields["team_id"] = int(tm.chatwoot_id)
+
+        if fields:
+            payload["fields"] = fields
+
+    return payload, None
+
+
+def _looks_like_uuid(value: str) -> bool:
+    try:
+        UUID(str(value))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 async def bulk_action_account(
     request: Request,
     current_user: User,
@@ -494,18 +598,22 @@ async def bulk_action_account(
     db: AsyncSession,
 ):
     """
-    Forward bulk actions sang Chatwoot.
+    Forward bulk actions sang messaging.
 
-    Payload ví dụ:
+    Payload gửi upstream (chỉ key có dữ liệu):
+    {
+        "type": "Conversation",
+        "ids": [53],
+        "fields": { "assignee_id": 2 }
+    }
+    hoặc labels:
     {
         "type": "Conversation",
         "ids": [35],
-        "labels": {
-            "remove": ["test"]
-        }
+        "labels": { "remove": ["test"] }
     }
     """
-    try: 
+    try:
         if not await isCheckMaxLevel(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
@@ -514,15 +622,17 @@ async def bulk_action_account(
             )
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
-        
+
         if account_id is None:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
-        
-        payload = body.model_dump(exclude_none=True)
+
+        payload, err = await _build_bulk_action_payload(body, db, tenant_id)
+        if err is not None:
+            return err
 
         pairs = _forward_all_query_pairs(request)
 
@@ -538,10 +648,10 @@ async def bulk_action_account(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Bulk action Chatwoot thành công",
+                "Bulk action messaging thành công",
                 {
                     "tenant_id": str(tenant_id),
-                    "chatwoot_account_id": account_id,
+                    "messaging_account_id": account_id,
                     "result": data,
                 },
             )
@@ -549,10 +659,10 @@ async def bulk_action_account(
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Bulk action Chatwoot thất bại",
+            "Bulk action messaging thất bại",
             _chatwoot_error_payload(
                 res,
-                sent_payload_keys=sorted(payload.keys(), key=str)
+                sent_payload_keys=sorted(payload.keys(), key=str),
             ),
         )
     except SQLAlchemyError as e:
@@ -577,7 +687,7 @@ async def add_new_agent_inboxes(
     body: ChatwootActionAgentInboxesBody,
     db: AsyncSession,
 ):
-    try: 
+    try:
         if not await isCheckMaxLevel(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
@@ -586,15 +696,28 @@ async def add_new_agent_inboxes(
             )
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
-        
+
         if account_id is None:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
-        
-        payload = body.model_dump(exclude_none=True)
+
+        remote_user_ids, missing_uuids = await _translate_local_agent_uuids_to_remote(
+            db, tenant_id, body.user_ids
+        )
+        if missing_uuids:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                f"Không tìm thấy map agent cho các UUID sau: {', '.join(missing_uuids)}",
+            )
+
+        payload = {
+            "inbox_id": body.inbox_id,
+            "user_ids": remote_user_ids,
+        }
 
         pairs = _forward_all_query_pairs(request)
 
@@ -613,7 +736,7 @@ async def add_new_agent_inboxes(
                 "Thêm agent vào inbox thành công",
                 {
                     "tenant_id": str(tenant_id),
-                    "chatwoot_account_id": account_id,
+                    "messaging_account_id": account_id,
                     "result": data,
                 },
             )
@@ -624,7 +747,7 @@ async def add_new_agent_inboxes(
             "Thêm agent vào inbox thất bại",
             _chatwoot_error_payload(
                 res,
-                sent_payload_keys=sorted(payload.keys(), key=str)
+                sent_payload_keys=sorted(payload.keys(), key=str),
             ),
         )
     except SQLAlchemyError as e:
@@ -642,6 +765,7 @@ async def add_new_agent_inboxes(
             f"Lỗi không xác định: {e}",
         )
 
+
 async def patch_new_agent_inboxes(
     request: Request,
     current_user: User,
@@ -649,7 +773,7 @@ async def patch_new_agent_inboxes(
     body: ChatwootActionAgentInboxesBody,
     db: AsyncSession,
 ):
-    try: 
+    try:
         if not await isCheckMaxLevel(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
@@ -658,15 +782,28 @@ async def patch_new_agent_inboxes(
             )
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
-        
+
         if account_id is None:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
-        
-        payload = body.model_dump(exclude_none=True)
+
+        remote_user_ids, missing_uuids = await _translate_local_agent_uuids_to_remote(
+            db, tenant_id, body.user_ids
+        )
+        if missing_uuids:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                f"Không tìm thấy map agent cho các UUID sau: {', '.join(missing_uuids)}",
+            )
+
+        payload = {
+            "inbox_id": body.inbox_id,
+            "user_ids": remote_user_ids,
+        }
 
         pairs = _forward_all_query_pairs(request)
 
@@ -682,10 +819,10 @@ async def patch_new_agent_inboxes(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Thêm agent vào inbox thành công",
+                "Cập nhật agent trong inbox thành công",
                 {
                     "tenant_id": str(tenant_id),
-                    "chatwoot_account_id": account_id,
+                    "messaging_account_id": account_id,
                     "result": data,
                 },
             )
@@ -693,10 +830,10 @@ async def patch_new_agent_inboxes(
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Thêm agent vào inbox thất bại",
+            "Cập nhật agent trong inbox thất bại",
             _chatwoot_error_payload(
                 res,
-                sent_payload_keys=sorted(payload.keys(), key=str)
+                sent_payload_keys=sorted(payload.keys(), key=str),
             ),
         )
     except SQLAlchemyError as e:
@@ -713,6 +850,7 @@ async def patch_new_agent_inboxes(
             ResponseStatusCode.INTERNAL_SERVER_ERROR,
             f"Lỗi không xác định: {e}",
         )
+
 
 async def get_custom_filters(
     request: Request,
@@ -734,7 +872,7 @@ async def get_custom_filters(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -754,7 +892,7 @@ async def get_custom_filters(
                 "Lấy danh sách custom filters thành công",
                 {
                     "tenant_id": str(tenant_id),
-                    "chatwoot_account_id": account_id,
+                    "messaging_account_id": account_id,
                     "custom_filters": data,
                 },
             )
@@ -764,7 +902,7 @@ async def get_custom_filters(
             res.status_code
             if res.status_code in (400, 401, 403, 404, 422, 503)
             else 502,
-            "Không lấy được danh sách custom filters từ Chatwoot",
+            "Không lấy được danh sách custom filters từ messaging",
             _chatwoot_error_payload(res),
         )
 
@@ -790,7 +928,7 @@ async def custom_filters(
     db: AsyncSession,
 ):
     """
-    Forward custom filter sang Chatwoot.
+    Forward custom filter sang messaging.
 
     Payload ví dụ:
     {
@@ -826,7 +964,7 @@ async def custom_filters(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         payload = body.model_dump(exclude_none=True)
@@ -846,10 +984,10 @@ async def custom_filters(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Tạo custom filter Chatwoot thành công",
+                "Tạo custom filter messaging thành công",
                 {
                     "tenant_id": str(tenant_id),
-                    "chatwoot_account_id": account_id,
+                    "messaging_account_id": account_id,
                     "result": data,
                 },
             )
@@ -857,7 +995,7 @@ async def custom_filters(
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (400, 401, 403, 404, 422, 503) else 502,
-            "Tạo custom filter Chatwoot thất bại",
+            "Tạo custom filter messaging thất bại",
             _chatwoot_error_payload(
                 res,
                 sent_payload_keys=sorted(payload.keys()),
@@ -902,7 +1040,7 @@ async def update_custom_filter(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         payload = body.model_dump(exclude_none=True)
@@ -925,7 +1063,7 @@ async def update_custom_filter(
                 "Cập nhật custom filter thành công",
                 {
                     "tenant_id": str(tenant_id),
-                    "chatwoot_account_id": account_id,
+                    "messaging_account_id": account_id,
                     "filter_id": filter_id,
                     "result": data,
                 },
@@ -980,7 +1118,7 @@ async def delete_custom_filter(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -998,7 +1136,7 @@ async def delete_custom_filter(
                 "Xóa custom filter thành công",
                 {
                     "tenant_id": str(tenant_id),
-                    "chatwoot_account_id": account_id,
+                    "messaging_account_id": account_id,
                     "filter_id": filter_id,
                 },
             )

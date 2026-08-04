@@ -192,10 +192,10 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             return api_response(
                 ResponseStatus.ERROR,
                 cw_res.status_code if cw_res.status_code in (401, 404, 422, 503) else 502,
-                "Tạo account Chatwoot thất bại, đã rollback tạo tenant",
+                "Tạo account messaging thất bại, đã rollback tạo tenant",
                 {
-                    "chatwoot_status_code": cw_res.status_code,
-                    "chatwoot_response": cw_res.data,
+                    "messaging_status_code": cw_res.status_code,
+                    "messaging_response": cw_res.data,
                 },
             )
         try:
@@ -205,8 +205,8 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             return api_response(
                 ResponseStatus.ERROR,
                 502,
-                "Chatwoot trả id account không hợp lệ, đã rollback tạo tenant",
-                {"chatwoot_response": cw_res.data},
+                "Messaging trả id account không hợp lệ, đã rollback tạo tenant",
+                {"messaging_response": cw_res.data},
             )
 
         # link integration user
@@ -222,12 +222,12 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
                 )
             except Exception as delete_ex:
                 logger.error(
-                    "Lỗi khi xóa account Chatwoot %s sau khi liên kết thất bại: %s",
+                    "Lỗi khi xóa account messaging %s sau khi liên kết thất bại: %s",
                     chatwoot_account_id,
                     str(delete_ex),
                 )
             await db.rollback()
-            msg = "Gắn user tích hợp vào Chatwoot account thất bại, đã rollback tạo doanh nghiệp"
+            msg = "Gắn user tích hợp vào messaging account thất bại, đã rollback tạo doanh nghiệp"
             if link_info.get("skipped_reason"):
                 msg += f". Lý do: {link_info.get('skipped_reason')}"
             return api_response(
@@ -261,7 +261,7 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             "Thêm tenant thành công",
             data={
                 "tenant": TenantResponse.model_validate(new_tenant),
-                "chatwoot_linked": True,
+                "messaging_linked": True,
             }
         )
 
@@ -333,10 +333,10 @@ async def updateTenant(
                 return api_response(
                     ResponseStatus.ERROR,
                     cw_res.status_code if cw_res.status_code in (401, 404, 422, 503) else 502,
-                    "Cập nhật account Chatwoot thất bại",
+                    "Cập nhật account messaging thất bại",
                     {
-                        "chatwoot_status_code": cw_res.status_code,
-                        "chatwoot_response": cw_res.data,
+                        "messaging_status_code": cw_res.status_code,
+                        "messaging_response": cw_res.data,
                     },
                 )
         else:
@@ -355,10 +355,10 @@ async def updateTenant(
                 return api_response(
                     ResponseStatus.ERROR,
                     cw_create.status_code if cw_create.status_code in (401, 404, 422, 503) else 502,
-                    "Tenant chưa có map và tạo account Chatwoot mới thất bại",
+                    "Tenant chưa có map và tạo account messaging mới thất bại",
                     {
-                        "chatwoot_status_code": cw_create.status_code,
-                        "chatwoot_response": cw_create.data,
+                        "messaging_status_code": cw_create.status_code,
+                        "messaging_response": cw_create.data,
                     },
                 )
             try:
@@ -368,8 +368,8 @@ async def updateTenant(
                 return api_response(
                     ResponseStatus.ERROR,
                     502,
-                    "Chatwoot trả id account không hợp lệ",
-                    {"chatwoot_response": cw_create.data},
+                    "Messaging trả id account không hợp lệ",
+                    {"messaging_response": cw_create.data},
                 )
             db.add(
                 ChatwootLegacyMap(
@@ -449,10 +449,10 @@ async def deleteTenant(tenant_id: UUID, current_user: User, request, db: AsyncSe
                 return api_response(
                     ResponseStatus.ERROR,
                     cw_res.status_code if cw_res.status_code in (401, 404, 422, 503) else 502,
-                    "Xóa account Chatwoot thất bại",
+                    "Xóa account messaging thất bại",
                     {
-                        "chatwoot_status_code": cw_res.status_code,
-                        "chatwoot_response": cw_res.data,
+                        "messaging_status_code": cw_res.status_code,
+                        "messaging_response": cw_res.data,
                     },
                 )
             await db.delete(account_map)

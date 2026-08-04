@@ -59,7 +59,7 @@ async def get_ticket_flow_by_id(
     flow_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
-    _ = Depends(has_permission("view_ticket_flow_by_id"))
+    _ = Depends(has_permission("view_ticket_flows"))
 ):
     """
     Lấy thông tin chi tiết một ticket flow theo ID

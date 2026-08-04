@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-Request body trùng với schema Chatwoot:
+Request body trùng với schema messaging:
 - Account create/update: account_create_update_payload + features (Rails permit)
 - Agent create/update: application_swagger agent_create_payload / agent_update_payload
 - AgentBot create/update: platform `platform_agent_bot_create_update_payload` (POST/PATCH /platform/api/v1/agent_bots)
@@ -27,10 +27,10 @@ class ChatwootProvisionAccountBody(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    tenant_id: UUID = Field(description="UUID tenant trên contact-center (không gửi sang Chatwoot)")
+    tenant_id: UUID = Field(description="UUID tenant trên contact-center (không gửi sang messaging)")
     name: str = Field(min_length=1, description="Name of the account")
     locale: str | None = Field(default=None, description="The locale of the account (e.g. en, vi)")
-    domain: str | None = Field(default=None, description="The domain of the account (max 100 chars on Chatwoot)")
+    domain: str | None = Field(default=None, description="The domain of the account (max 100 chars on messaging)")
     support_email: str | None = Field(default=None, description="The support email of the account")
     status: Literal["active", "suspended"] | None = Field(
         default=None, description="The status of the account"
@@ -42,7 +42,7 @@ class ChatwootProvisionAccountBody(BaseModel):
     features: dict[str, Any] | None = Field(
         default=None,
         description=(
-            "Feature flags (Platform API). Key không nằm trong whitelist server sẽ **bỏ** trước khi gửi Chatwoot "
+            "Feature flags (Platform API). Key không nằm trong whitelist server sẽ **bỏ** trước khi gửi messaging "
             "(tránh 500 và tránh phải POST lại — POST lại dễ tạo duplicate account)."
         ),
     )
@@ -100,9 +100,9 @@ class ChatwootAgentBotCreateBody(BaseModel):
     outgoing_url, avatar, avatar_url).
 
     - **avatar** (binary): swagger mô tả multipart/form-data; API JSON của contact-center **không** gửi
-      được file — dùng `avatar_url` hoặc gọi trực tiếp Chatwoot multipart nếu cần upload file.
-    - **account_id**: với `POST /chatwoot/tenants/{tenant_id}/agent-bots`, server **luôn ghi đè**
-      bằng Chatwoot account đã map (an toàn đa-tenant).
+      được file — dùng `avatar_url` hoặc gọi trực tiếp messaging multipart nếu cần upload file.
+    - **account_id**: với `POST /messaging/tenants/{tenant_id}/agent-bots`, server **luôn ghi đè**
+      bằng messaging account đã map (an toàn đa-tenant).
     """
 
     model_config = ConfigDict(extra="allow")
@@ -120,7 +120,7 @@ class ChatwootAgentBotCreateBody(BaseModel):
     )
     avatar_url: str | None = Field(
         default=None,
-        description="URL tới jpeg/png; Chatwoot tải avatar bất đồng bộ (AvatarFromUrlJob).",
+        description="URL tới jpeg/png; Hệ thống tải avatar bất đồng bộ (AvatarFromUrlJob).",
     )
 
 
@@ -152,7 +152,7 @@ class ChatwootAgentBotUpdateBody(BaseModel):
 class ChatwootAgentBotRecord(BaseModel):
     """
     Shape phản hồi `agent_bot` từ Platform API (GET list/show, POST/PATCH 200) — theo swagger
-    `components.schemas.agent_bot`. Dùng làm tài liệu / typing; response thực tế vẫn do Chatwoot trả về.
+    `components.schemas.agent_bot`. Dùng làm tài liệu / typing; response thực tế vẫn do messaging trả về.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -180,7 +180,7 @@ class ChatwootAgentBotRecord(BaseModel):
 
 
 class ChatwootUserCreateBody(BaseModel):
-    """Body POST /chatwoot/users/{user_id} — tạo user Platform Chatwoot và map với user nội bộ (user_id trên path)."""
+    """Body POST /messaging/users/{user_id} — tạo user Platform và map với user nội bộ (user_id trên path)."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -212,19 +212,19 @@ class ChatwootConversationAssignBody(BaseModel):
     POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments
     ([Assign Conversation](https://developers.chatwoot.com/api-reference/conversation-assignments/assign-conversation)).
 
-    - Gửi **assignee_agent_uuid** để gán agent (UUID nội bộ đã map với Chatwoot agent id).
-    - Hoặc gửi **team_id** (UUID team nội bộ đã map với Chatwoot team id). Nếu có cả hai, Chatwoot ưu tiên assignee.
+    - Gửi **assignee_agent_uuid** để gán agent (UUID nội bộ đã map với messaging agent id).
+    - Hoặc gửi **team_id** (UUID team nội bộ đã map với messaging team id). Nếu có cả hai, messaging ưu tiên assignee.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     assignee_agent_uuid: UUID | None = Field(
         default=None,
-        description="UUID agent trong contact-center (bảng map); không gửi id số Chatwoot.",
+        description="UUID agent trong contact-center (bảng map); không gửi id số remote.",
     )
     team_id: UUID | None = Field(
         default=None,
-        description="UUID team trong contact-center (bảng map); không gửi id số Chatwoot.",
+        description="UUID team trong contact-center (bảng map); không gửi id số remote.",
     )
 
     @model_validator(mode="after")
@@ -235,7 +235,7 @@ class ChatwootConversationAssignBody(BaseModel):
 
 
 class ChatwootApplicationJsonBody(BaseModel):
-    """Forward nguyên JSON body sang Chatwoot Application API (extra fields giữ nguyên key)."""
+    """Forward nguyên JSON body sang messaging Application API (extra fields giữ nguyên key)."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -276,16 +276,55 @@ class ChatwootConversationCustomAttributesBody(BaseModel):
 
     custom_attributes: dict[str, Any]
 
-class ChatwootBulkActionLabelsBody(BaseModel):
-    """POST .../conversations/bulk_action_labels — thêm hoặc xóa label cho nhiều conversation."""
+class ChatwootBulkActionBody(BaseModel):
+    """
+    POST /accounts/{account_id}/bulk_actions
+
+    Ví dụ bulk assign:
+    {
+      "type": "Conversation",
+      "ids": [53],
+      "fields": { "assignee_id": "<uuid agent nội bộ hoặc id số remote>" }
+    }
+
+    Ví dụ bulk labels:
+    {
+      "type": "Conversation",
+      "ids": [35],
+      "labels": { "add": ["vip"], "remove": ["test"] }
+    }
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     type: Literal["Conversation"]
-    ids: list[int]
-    labels: dict[str, list[str]] = Field(default_factory=dict)
-    fields: dict[str, Any] = Field(default_factory=dict)
+    ids: list[int] = Field(min_length=1, description="Danh sách conversation id (messaging)")
+    labels: dict[str, list[str]] | None = Field(
+        default=None,
+        description="Tùy chọn: add/remove labels. Chỉ gửi khi có dữ liệu.",
+    )
+    fields: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Tùy chọn: field bulk update (status, assignee_id, team_id, ...). "
+            "assignee_id có thể là UUID agent nội bộ (backend map) hoặc id số remote."
+        ),
+    )
+
+
+# Tương thích import cũ
+ChatwootBulkActionLabelsBody = ChatwootBulkActionBody
 
 class ChatwootActionAgentInboxesBody(BaseModel):
-    inbox_id: int
-    user_ids: list[int] = Field(default_factory=list)
+    """POST/PATCH inbox_members — gán agent vào inbox theo UUID nội bộ."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inbox_id: int = Field(description="ID inbox phía messaging account")
+    user_ids: list[UUID] = Field(
+        default_factory=list,
+        description="Danh sách UUID agent/user nội bộ (contact-center); backend map sang id remote",
+    )
 
 class ConversationFilter(BaseModel):
     """Shape filter conversation khi gọi GET /api/v1/accounts/{account_id}/conversations."""

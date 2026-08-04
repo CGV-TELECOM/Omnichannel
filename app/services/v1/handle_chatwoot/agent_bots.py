@@ -40,7 +40,7 @@ async def list_all_agent_bots(
     current_user: User,
     db: AsyncSession,
 ):
-    """GET /platform/api/v1/agent_bots — toàn bộ bot trên instance Chatwoot (Platform API)."""
+    """GET /platform/api/v1/agent_bots — toàn bộ bot trên instance messaging (Platform API)."""
     try:
         if not await isCheckMaxLevel(current_user, db):
             return api_response(
@@ -67,13 +67,13 @@ async def list_all_agent_bots(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Danh sách AgentBot Chatwoot (toàn instance, đã ẩn id Chatwoot)",
+                "Danh sách AgentBot messaging (toàn instance, đã ẩn id messaging)",
                 {"agent_bots": redacted},
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Không lấy được danh sách AgentBot từ Chatwoot",
+            "Không lấy được danh sách AgentBot từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -96,7 +96,7 @@ async def list_tenant_agent_bots(
     tenant_id: UUID,
     db: AsyncSession,
 ):
-    """Lọc bot thuộc đúng Chatwoot account đã map với tenant."""
+    """Lọc bot thuộc đúng messaging account đã map với tenant."""
     try:
         if not await isCheckMaxLevel(current_user, db):
             return api_response(
@@ -109,7 +109,7 @@ async def list_tenant_agent_bots(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.platform_request(
@@ -119,7 +119,7 @@ async def list_tenant_agent_bots(
             return api_response(
                 ResponseStatus.ERROR,
                 res.status_code if res.status_code in (401, 404, 503) else 502,
-                "Không lấy được danh sách AgentBot từ Chatwoot",
+                "Không lấy được danh sách AgentBot từ messaging",
                 _chatwoot_error_payload(res),
             )
         filtered = [
@@ -182,7 +182,7 @@ async def create_agent_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         payload = _platform_agent_bot_create_payload(body, account_id)
         pairs = _forward_all_query_pairs(request)
@@ -201,7 +201,7 @@ async def create_agent_bot(
                 return api_response(
                     ResponseStatus.ERROR,
                     502,
-                    "Chatwoot trả AgentBot không có id hợp lệ",
+                    "Messaging trả AgentBot không có id hợp lệ",
                     _chatwoot_error_payload(
                         res, sent_payload_keys=sorted(payload.keys(), key=str)
                     ),
@@ -211,7 +211,7 @@ async def create_agent_bot(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã tạo AgentBot trên Chatwoot",
+                "Đã tạo AgentBot trên messaging",
                 {
                     "tenant_id": str(tenant_id),
                     "agent_bot": _chatwoot_agent_bot_public(res.data, m.local_uuid),
@@ -220,7 +220,7 @@ async def create_agent_bot(
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Tạo AgentBot trên Chatwoot thất bại",
+            "Tạo AgentBot trên messaging thất bại",
             _chatwoot_error_payload(
                 res, sent_payload_keys=sorted(payload.keys(), key=str)
             ),
@@ -258,7 +258,7 @@ async def get_agent_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         m = await _map_tenant_agent_bot_by_local(db, tenant_id, bot_id)
         if not m:
@@ -275,14 +275,14 @@ async def get_agent_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 res.status_code if res.status_code in (401, 404, 503) else 502,
-                "Không lấy được AgentBot từ Chatwoot",
+                "Không lấy được AgentBot từ messaging",
                 _chatwoot_error_payload(res),
             )
         if not _agent_bot_belongs_to_account(res.data, account_id):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "AgentBot không thuộc account Chatwoot của tenant này",
+                "AgentBot không thuộc account messaging của tenant này",
             )
         return api_response(
             ResponseStatus.SUCCESS,
@@ -327,7 +327,7 @@ async def update_agent_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         m = await _map_tenant_agent_bot_by_local(db, tenant_id, bot_id)
         if not m:
@@ -346,14 +346,14 @@ async def update_agent_bot(
                 get_res.status_code
                 if get_res.status_code in (401, 404, 503)
                 else 502,
-                "Không lấy được AgentBot từ Chatwoot",
+                "Không lấy được AgentBot từ messaging",
                 _chatwoot_error_payload(get_res),
             )
         if not _agent_bot_belongs_to_account(get_res.data, account_id):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "AgentBot không thuộc account Chatwoot của tenant này",
+                "AgentBot không thuộc account messaging của tenant này",
             )
         payload = _platform_agent_bot_update_payload(body)
         if not payload:
@@ -372,7 +372,7 @@ async def update_agent_bot(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã cập nhật AgentBot trên Chatwoot",
+                "Đã cập nhật AgentBot trên messaging",
                 {
                     "tenant_id": str(tenant_id),
                     "agent_bot": _chatwoot_agent_bot_public(res.data, m.local_uuid),
@@ -419,7 +419,7 @@ async def delete_agent_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         m = await _map_tenant_agent_bot_by_local(db, tenant_id, bot_id)
         if not m:
@@ -438,14 +438,14 @@ async def delete_agent_bot(
                 get_res.status_code
                 if get_res.status_code in (401, 404, 503)
                 else 502,
-                "Không lấy được AgentBot từ Chatwoot",
+                "Không lấy được AgentBot từ messaging",
                 _chatwoot_error_payload(get_res),
             )
         if not _agent_bot_belongs_to_account(get_res.data, account_id):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "AgentBot không thuộc account Chatwoot của tenant này",
+                "AgentBot không thuộc account messaging của tenant này",
             )
         res = await chatwoot_client.platform_request(
             "DELETE", f"/platform/api/v1/agent_bots/{m.chatwoot_id}", params=pairs or None
@@ -456,7 +456,7 @@ async def delete_agent_bot(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã xóa AgentBot trên Chatwoot",
+                "Đã xóa AgentBot trên messaging",
                 {
                     "tenant_id": str(tenant_id),
                     "removed_agent_bot_id": str(bot_id),
@@ -499,7 +499,7 @@ async def list_account_agent_bots(
         forward_all_query_params=True,
         redact_agents=False,
         ok_message="Danh sách Account AgentBots",
-        error_message="Không lấy được danh sách Account AgentBots từ Chatwoot",
+        error_message="Không lấy được danh sách Account AgentBots từ messaging",
     )
 
 
@@ -548,7 +548,7 @@ async def get_account_agent_bot(
         redact_agents=False,
         ok_message="Chi tiết Account AgentBot",
         extra_response={"agent_bot_id": agent_bot_id},
-        error_message="Không lấy được Account AgentBot từ Chatwoot",
+        error_message="Không lấy được Account AgentBot từ messaging",
     )
 
 

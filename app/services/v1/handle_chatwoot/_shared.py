@@ -94,10 +94,10 @@ async def _tenant_application_forward(
     ok_message: str,
     success_codes: frozenset[int] = frozenset({200}),
     extra_response: dict[str, Any] | None = None,
-    error_message: str = "Chatwoot trả lỗi",
+    error_message: str = "Messaging trả lỗi",
     error_payload_keys: list[str] | None = None,
 ) -> Any:
-    """Forward Application API theo account đã map; bọc `chatwoot` + optional redact agent id."""
+    """Forward Application API theo account đã map; bọc `messaging` + optional redact agent id."""
     try:
         if params is None and request is not None:
             if forward_all_query_params:
@@ -112,7 +112,7 @@ async def _tenant_application_forward(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         path = _application_account_path(account_id, path_suffix)
         res = await chatwoot_client.application_request(
@@ -125,7 +125,7 @@ async def _tenant_application_forward(
                 data = _walk_redact_agent_refs(data, cw_map)
             payload: dict[str, Any] = {
                 "tenant_id": str(tenant_id),
-                "chatwoot": data,
+                "messaging": data,
             }
             if extra_response:
                 payload.update(extra_response)
@@ -160,17 +160,17 @@ def _chatwoot_error_payload(
     *,
     sent_payload_keys: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Trả về chi tiết lỗi từ Chatwoot (JSON parse + body thô) để debug 500."""
+    """Trả về chi tiết lỗi từ messaging (JSON parse + body thô) để debug 500."""
     out: dict[str, Any] = {
-        "chatwoot_http_status": res.status_code,
-        "chatwoot_path": res.path,
+        "messaging_http_status": res.status_code,
+        "messaging_path": res.path,
     }
     if sent_payload_keys is not None:
         out["request_payload_keys_sent"] = sent_payload_keys
     if isinstance(res.data, (dict, list)):
-        out["chatwoot_json"] = res.data
+        out["messaging_json"] = res.data
     elif res.data is not None:
-        out["chatwoot_body"] = res.data
+        out["messaging_body"] = res.data
     if res.raw_text:
         out["raw_response_body_preview"] = res.raw_text[:12000]
     return out
@@ -254,7 +254,7 @@ def _agent_bot_belongs_to_account(bot: Any, account_id: int) -> bool:
 
 
 def _chatwoot_agent_public(agent: dict[str, Any], local_uuid: UUID) -> dict[str, Any]:
-    """Ẩn id số Chatwoot khỏi payload trả API; `id` là UUID nội bộ."""
+    """Ẩn id số messaging khỏi payload trả API; `id` là UUID nội bộ."""
     out = {k: v for k, v in agent.items() if k not in ("id", "account_id")}
     out["id"] = str(local_uuid)
     return out
@@ -279,7 +279,7 @@ def _chatwoot_user_public(user: dict[str, Any], local_uuid: UUID) -> dict[str, A
 async def _chatwoot_agent_id_to_local_map(
     db: AsyncSession, tenant_id: UUID
 ) -> dict[int, UUID]:
-    """Map id số agent trên Chatwoot → UUID nội bộ (để che id khi trả JSON)."""
+    """Map id số agent trên messaging → UUID nội bộ (để che id khi trả JSON)."""
     q = await db.execute(
         select(ChatwootLegacyMap.chatwoot_id, ChatwootLegacyMap.local_uuid).where(
             and_(
@@ -306,7 +306,7 @@ def _redact_chatwoot_agent_like_user(
 def _walk_redact_agent_refs(
     obj: Any, cw_to_local: dict[int, UUID]
 ) -> Any:
-    """Thay id agent Chatwoot (assignee, sender agent) bằng UUID map khi có."""
+    """Thay id agent messaging (assignee, sender agent) bằng UUID map khi có."""
     if isinstance(obj, dict):
         d: dict[str, Any] = {}
         for k, v in obj.items():
@@ -457,6 +457,54 @@ async def _map_user_by_local(
     return q.scalar_one_or_none()
 
 
+async def _translate_local_agent_uuids_to_remote(
+    db: AsyncSession, tenant_id: UUID, local_uuids: list[UUID]
+) -> tuple[list[int], list[str]]:
+    """
+    Map UUID agent/user nội bộ → id số remote (inbox_members / team_members).
+
+    Ưu tiên map AGENT theo tenant; thiếu thì fallback USER (user sync thành agent).
+    """
+    if not local_uuids:
+        return [], []
+
+    found_map: dict[UUID, int] = {}
+
+    agents_q = await db.execute(
+        select(ChatwootLegacyMap).where(
+            and_(
+                ChatwootLegacyMap.resource_type == ChatwootMapResourceType.AGENT,
+                ChatwootLegacyMap.tenant_id == tenant_id,
+                ChatwootLegacyMap.local_uuid.in_(local_uuids),
+            )
+        )
+    )
+    for row in agents_q.scalars().all():
+        found_map[row.local_uuid] = int(row.chatwoot_id)
+
+    missing = [uid for uid in local_uuids if uid not in found_map]
+    if missing:
+        users_q = await db.execute(
+            select(ChatwootLegacyMap).where(
+                and_(
+                    ChatwootLegacyMap.resource_type == ChatwootMapResourceType.USER,
+                    ChatwootLegacyMap.local_uuid.in_(missing),
+                )
+            )
+        )
+        for row in users_q.scalars().all():
+            found_map[row.local_uuid] = int(row.chatwoot_id)
+
+    remote_ids: list[int] = []
+    missing_uuids: list[str] = []
+    for uid in local_uuids:
+        if uid in found_map:
+            remote_ids.append(found_map[uid])
+        else:
+            missing_uuids.append(str(uid))
+    return remote_ids, missing_uuids
+
+
 async def _ensure_user_map(
     db: AsyncSession, local_user_id: UUID, chatwoot_numeric_id: int
 ) -> ChatwootLegacyMap:
@@ -501,7 +549,7 @@ async def _delete_tenant_agent_and_bot_maps(db: AsyncSession, tenant_id: UUID) -
 
 async def _integration_chatwoot_user_id() -> tuple[int | None, str | None]:
     """
-    User Chatwoot dùng cho Application API (CHATWOOT_USER_API_TOKEN), cần id để POST account_users.
+    User messaging dùng cho Application API (CHATWOOT_USER_API_TOKEN), cần id để POST account_users.
     Ưu tiên CHATWOOT_INTEGRATION_USER_ID; không thì GET /api/v1/profile.
     """
     if settings.CHATWOOT_INTEGRATION_USER_ID is not None:
@@ -516,7 +564,7 @@ async def _integration_chatwoot_user_id() -> tuple[int | None, str | None]:
         return None, "GET /api/v1/profile thất bại — kiểm tra CHATWOOT_USER_API_TOKEN hoặc set CHATWOOT_INTEGRATION_USER_ID"
     uid = res.data.get("id")
     if uid is None:
-        return None, "Profile Chatwoot không có trường id"
+        return None, "Profile messaging không có trường id"
     try:
         return int(uid), None
     except (TypeError, ValueError):
@@ -526,7 +574,7 @@ async def _integration_chatwoot_user_id() -> tuple[int | None, str | None]:
 async def link_integration_user_to_chatwoot_account(account_id: int) -> dict[str, Any]:
     """
     POST /platform/api/v1/accounts/{id}/account_users — gắn user tích hợp vào account.
-    Phía Chatwoot dùng find_or_initialize_by nên gọi lại an toàn (cập nhật role nếu cần).
+    Phía messaging dùng find_or_initialize_by nên gọi lại an toàn (cập nhật role nếu cần).
     """
     uid, skip_reason = await _integration_chatwoot_user_id()
     out: dict[str, Any] = {
@@ -548,13 +596,13 @@ async def link_integration_user_to_chatwoot_account(account_id: int) -> dict[str
     if res.status_code in (200, 201):
         out["linked"] = True
         if isinstance(res.data, dict):
-            out["chatwoot_account_user"] = res.data
+            out["messaging_account_user"] = res.data
     else:
         out["error"] = _chatwoot_error_payload(
             res, sent_payload_keys=["user_id", "role"]
         )
         logger.warning(
-            "Gắn user tích hợp vào Chatwoot account %s thất bại: HTTP %s",
+            "Gắn user tích hợp vào messaging account %s thất bại: HTTP %s",
             account_id,
             res.status_code,
         )

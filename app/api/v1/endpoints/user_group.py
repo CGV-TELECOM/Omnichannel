@@ -29,6 +29,6 @@ async def remove_user_from_group(
     request: Request,
     user_group_data: UserGroupDelete,
     db: AsyncSession = Depends(get_db),
-    _ = Depends(has_permission("delete_user_group"))
+    _ = Depends(has_permission("delete_group"))
 ):
     return await handle_user_group.delete_user_group(user_group_data, db)

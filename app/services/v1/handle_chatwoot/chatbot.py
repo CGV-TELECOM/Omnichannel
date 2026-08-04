@@ -135,7 +135,7 @@ async def send_chatwoot_reply(
     reply_text: str
 ) -> bool:
     """
-    Gửi câu trả lời của Bot sang Chatwoot dưới dạng tin nhắn Outgoing.
+    Gửi câu trả lời của Bot sang messaging dưới dạng tin nhắn Outgoing.
     """
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages"
     payload = {
@@ -145,7 +145,7 @@ async def send_chatwoot_reply(
     res = await chatwoot_client.application_request("POST", path, json_body=payload)
     if res.status_code not in (200, 201):
         logger.error(
-            "Gửi tin nhắn trả lời Chatwoot thất bại cho hội thoại %s: %s",
+            "Gửi tin nhắn trả lời messaging thất bại cho hội thoại %s: %s",
             conversation_id,
             res.data
         )
@@ -159,7 +159,7 @@ async def chatbot_enabled(
     is_active: bool
 ):
     """
-    Cập nhật trạng thái hoạt động của bot lên Custom Attributes và Labels của cuộc hội thoại trên Chatwoot.
+    Cập nhật trạng thái hoạt động của bot lên Custom Attributes và Labels của cuộc hội thoại trên messaging.
     """
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
     payload = {
@@ -182,7 +182,7 @@ async def send_internal_note(
     note_text: str
 ):
     """
-    Tạo tin nhắn ghi chú nội bộ (Internal Note) trong Chatwoot.
+    Tạo tin nhắn ghi chú nội bộ (Internal Note) trong messaging.
     """
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages"
     payload = {

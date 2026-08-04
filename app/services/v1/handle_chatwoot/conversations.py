@@ -59,7 +59,7 @@ async def list_conversations(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         raw_pairs = _forward_all_query_pairs(request)
         pairs: list[tuple[str, str]] = []
@@ -104,16 +104,16 @@ async def list_conversations(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Danh sách conversation Chatwoot (agent id đã map sang UUID)",
+                "Danh sách conversation messaging (agent id đã map sang UUID)",
                 {
                     "tenant_id": str(tenant_id),
-                    "chatwoot": data,
+                    "messaging": data,
                 },
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (400, 401, 403, 404, 503) else 502,
-            "Không lấy được danh sách conversation từ Chatwoot",
+            "Không lấy được danh sách conversation từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -150,7 +150,7 @@ async def filter_conversations(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
 
         res = await chatwoot_client.application_request(
@@ -171,14 +171,14 @@ async def filter_conversations(
                 "Lọc danh sách conversation thành công",
                 {
                     "tenant_id": str(tenant_id),
-                    "chatwoot": data,
+                    "messaging": data,
                 },
             )
 
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (400, 401, 403, 404, 503) else 502,
-            "Không lọc được danh sách conversation từ Chatwoot",
+            "Không lọc được danh sách conversation từ messaging",
             _chatwoot_error_payload(res),
         )
 
@@ -214,7 +214,7 @@ async def get_conversation(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
@@ -228,17 +228,17 @@ async def get_conversation(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Chi tiết conversation Chatwoot (agent id đã map sang UUID)",
+                "Chi tiết conversation messaging (agent id đã map sang UUID)",
                 {
                     "tenant_id": str(tenant_id),
                     "conversation_id": conversation_id,
-                    "chatwoot": data,
+                    "messaging": data,
                 },
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 403, 404, 503) else 502,
-            "Không lấy được conversation từ Chatwoot",
+            "Không lấy được conversation từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -271,12 +271,12 @@ async def delete_conversation(
         path_suffix=f"/conversations/{conversation_id}",
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Đã xóa conversation trên Chatwoot",
+        ok_message="Đã xóa conversation trên messaging",
         success_codes=frozenset({200, 204}),
         extra_response={
             "conversation_id": conversation_id,
         },
-        error_message="Xóa conversation trên Chatwoot thất bại",
+        error_message="Xóa conversation trên messaging thất bại",
     )
 
 
@@ -301,7 +301,7 @@ async def list_conversation_messages(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
@@ -319,13 +319,13 @@ async def list_conversation_messages(
                 {
                     "tenant_id": str(tenant_id),
                     "conversation_id": conversation_id,
-                    "chatwoot": data,
+                    "messaging": data,
                 },
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Không lấy được messages từ Chatwoot",
+            "Không lấy được messages từ messaging",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -363,7 +363,7 @@ async def assign_conversation(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map Chatwoot account cho tenant này",
+                "Chưa có map messaging account cho tenant này",
             )
         payload: dict[str, Any] = {}
         if body.assignee_agent_uuid is not None:
@@ -398,17 +398,17 @@ async def assign_conversation(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Đã assign conversation trên Chatwoot",
+                "Đã assign conversation trên messaging",
                 {
                     "tenant_id": str(tenant_id),
                     "conversation_id": conversation_id,
-                    "chatwoot": out_data,
+                    "messaging": out_data,
                 },
             )
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 422, 503) else 502,
-            "Assign conversation trên Chatwoot thất bại",
+            "Assign conversation trên messaging thất bại",
             _chatwoot_error_payload(
                 res, sent_payload_keys=sorted(payload.keys(), key=str)
             ),
@@ -446,8 +446,8 @@ async def list_inboxes(
         path_suffix="/inboxes",
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Danh sách inbox Chatwoot",
-        error_message="Không lấy được danh sách inbox từ Chatwoot",
+        ok_message="Danh sách inbox messaging",
+        error_message="Không lấy được danh sách inbox từ messaging",
     )
 
 
@@ -470,9 +470,9 @@ async def create_inbox(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Đã tạo inbox trên Chatwoot",
+        ok_message="Đã tạo inbox trên messaging",
         success_codes=frozenset({200, 201}),
-        error_message="Tạo inbox trên Chatwoot thất bại",
+        error_message="Tạo inbox trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
     )
 
@@ -494,8 +494,8 @@ async def get_inbox(
         path_suffix=f"/inboxes/{inbox_id}",
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Chi tiết inbox Chatwoot",
-        error_message="Không lấy được inbox từ Chatwoot",
+        ok_message="Chi tiết inbox messaging",
+        error_message="Không lấy được inbox từ messaging",
     )
 
 
@@ -519,8 +519,8 @@ async def update_inbox(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Đã cập nhật inbox trên Chatwoot",
-        error_message="Cập nhật inbox trên Chatwoot thất bại",
+        ok_message="Đã cập nhật inbox trên messaging",
+        error_message="Cập nhật inbox trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
     )
 
@@ -544,9 +544,9 @@ async def create_conversation(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=True,
-        ok_message="Đã tạo conversation trên Chatwoot",
+        ok_message="Đã tạo conversation trên messaging",
         success_codes=frozenset({200, 201}),
-        error_message="Tạo conversation trên Chatwoot thất bại",
+        error_message="Tạo conversation trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
     )
 
@@ -571,9 +571,9 @@ async def update_conversation(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=True,
-        ok_message="Đã cập nhật conversation trên Chatwoot",
+        ok_message="Đã cập nhật conversation trên messaging",
         extra_response={"conversation_id": conversation_id},
-        error_message="Cập nhật conversation trên Chatwoot thất bại",
+        error_message="Cập nhật conversation trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
     )
 
@@ -598,10 +598,10 @@ async def create_conversation_message(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=True,
-        ok_message="Đã gửi message lên Chatwoot",
+        ok_message="Đã gửi message lên messaging",
         success_codes=frozenset({200, 201}),
         extra_response={"conversation_id": conversation_id},
-        error_message="Gửi message lên Chatwoot thất bại",
+        error_message="Gửi message lên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
     )
 
@@ -626,13 +626,13 @@ async def delete_conversation_message(
         path_suffix=f"/conversations/{conversation_id}/messages/{message_id}",
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Đã xóa message trên Chatwoot",
+        ok_message="Đã xóa message trên messaging",
         success_codes=frozenset({200, 204}),
         extra_response={
             "conversation_id": conversation_id,
             "message_id": message_id,
         },
-        error_message="Xóa message trên Chatwoot thất bại",
+        error_message="Xóa message trên messaging thất bại",
     )
 
 
@@ -656,7 +656,7 @@ async def toggle_conversation_status(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=True,
-        ok_message="Đã đổi trạng thái conversation trên Chatwoot",
+        ok_message="Đã đổi trạng thái conversation trên messaging",
         extra_response={"conversation_id": conversation_id},
         error_message="Đổi trạng thái conversation thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
@@ -682,7 +682,7 @@ async def get_conversation_labels(
         redact_agents=False,
         ok_message="Danh sách label của conversation",
         extra_response={"conversation_id": conversation_id},
-        error_message="Không lấy được label conversation từ Chatwoot",
+        error_message="Không lấy được label conversation từ messaging",
     )
 
 
@@ -702,9 +702,9 @@ async def list_labels(
         path_suffix="/labels",
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Danh sách labels của account Chatwoot",
+        ok_message="Danh sách labels của account messaging",
         extra_response={"tenant_id": str(tenant_id)},
-        error_message="Không lấy được danh sách labels từ Chatwoot",
+        error_message="Không lấy được danh sách labels từ messaging",
     )
 
 
@@ -727,9 +727,9 @@ async def create_label(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Đã tạo label trên Chatwoot",
+        ok_message="Đã tạo label trên messaging",
         extra_response={"tenant_id": str(tenant_id)},
-        error_message="Tạo label trên Chatwoot thất bại",
+        error_message="Tạo label trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
     )
 
@@ -752,9 +752,9 @@ async def delete_label(
         path_suffix=f"/labels/{encoded_label}",
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Đã xóa label trên Chatwoot",
+        ok_message="Đã xóa label trên messaging",
         extra_response={"tenant_id": str(tenant_id), "label": label},
-        error_message="Xóa label trên Chatwoot thất bại",
+        error_message="Xóa label trên messaging thất bại",
     )
 
 
@@ -778,7 +778,7 @@ async def set_conversation_labels(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Đã cập nhật label conversation trên Chatwoot",
+        ok_message="Đã cập nhật label conversation trên messaging",
         extra_response={"conversation_id": conversation_id},
         error_message="Cập nhật label conversation thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
@@ -805,7 +805,7 @@ async def toggle_conversation_typing(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Đã gửi typing status lên Chatwoot",
+        ok_message="Đã gửi typing status lên messaging",
         extra_response={"conversation_id": conversation_id},
         error_message="Gửi typing status thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
@@ -832,7 +832,7 @@ async def update_conversation_custom_attributes(
         json_body=payload,
         forward_all_query_params=True,
         redact_agents=True,
-        ok_message="Đã cập nhật custom_attributes conversation trên Chatwoot",
+        ok_message="Đã cập nhật custom_attributes conversation trên messaging",
         extra_response={"conversation_id": conversation_id},
         error_message="Cập nhật custom_attributes conversation thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
@@ -855,8 +855,8 @@ async def get_attachment(
         path_suffix=f"/conversations/{conversation_id}/attachments",
         forward_all_query_params=True,
         redact_agents=False,
-        ok_message="Chi tiết attachment Chatwoot",
-        error_message="Không lấy được attachment từ Chatwoot",
+        ok_message="Chi tiết attachment messaging",
+        error_message="Không lấy được attachment từ messaging",
     )
 
 async def update_last_seen(
@@ -876,7 +876,7 @@ async def update_last_seen(
         path_suffix=f"/conversations/{conversation_id}/update_last_seen",
         forward_all_query_params=True,
         redact_agents=True,
-        ok_message="Đã cập nhật last_seen conversation trên Chatwoot",
+        ok_message="Đã cập nhật last_seen conversation trên messaging",
         extra_response={"conversation_id": conversation_id},
         error_message="Cập nhật last_seen conversation thất bại",
     )

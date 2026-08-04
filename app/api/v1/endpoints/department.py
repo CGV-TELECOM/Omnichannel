@@ -45,7 +45,7 @@ async def get_department_by_id(
     department_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
-    _ = Depends(has_permission("view_department_by_id"))
+    _ = Depends(has_permission("view_departments"))
     
 ):
     return await handle_department.get_department_by_id(department_id, db, current_user)
@@ -56,7 +56,7 @@ async def get_department_detail(
     department_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
-    _ = Depends(has_permission("view_department_by_id"))
+    _ = Depends(has_permission("view_departments"))
 ):
     return await handle_department.get_department_detail(department_id, db, current_user)
 

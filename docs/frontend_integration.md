@@ -1,13 +1,13 @@
-# Hướng dẫn tích hợp Real-time Chatwoot với Frontend
+# Hướng dẫn tích hợp Real-time messaging với Frontend
 
-Tài liệu này hướng dẫn cách kết nối client-side (Frontend) tới Socket.IO của Backend để xử lý luồng tin nhắn và sự kiện thời gian thực (real-time) từ Chatwoot mà không cần tải lại trang.
+Tài liệu này hướng dẫn cách kết nối client-side (Frontend) tới Socket.IO của Backend để xử lý luồng tin nhắn và sự kiện thời gian thực (real-time) từ messaging mà không cần tải lại trang.
 
 ---
 
 ## 1. Cơ chế hoạt động (Overview)
 ```mermaid
 sequenceDiagram
-    participant CW as Chatwoot Server
+    participant CW as messaging Server
     participant BE as Backend (FastAPI)
     participant Socket as Socket.IO Server (BE)
     participant FE as Frontend Client
@@ -15,7 +15,7 @@ sequenceDiagram
     CW->>BE: 1. Gửi Webhook sự kiện (message_created, v.v.)
     Note over BE: 2. Ánh xạ các Agent ID gốc (số)<br/>sang UUID nội bộ của hệ thống
     BE->>Socket: 3. Đưa payload đã ánh xạ tới Socket.IO
-    Socket->>FE: 4. Phát sự kiện `chatwoot_event` đến Room `tenant:<id>`
+    Socket->>FE: 4. Phát sự kiện `messaging_event` đến Room `tenant:<id>`
     Note over FE: 5. Nhận event, append tin nhắn mới<br/>hoặc cập nhật state UI
 ```
 
@@ -64,9 +64,9 @@ socket.on("authentication_error", (error) => {
 
 ---
 
-## 3. Lắng nghe sự kiện Chatwoot (`chatwoot_event`)
+## 3. Lắng nghe sự kiện messaging (`messaging_event`)
 
-Toàn bộ thông tin cập nhật từ Chatwoot sẽ được phát qua kênh sự kiện `"chatwoot_event"`. Cấu trúc gói tin nhận được:
+Toàn bộ thông tin cập nhật từ messaging sẽ được phát qua kênh sự kiện `"messaging_event"`. Cấu trúc gói tin nhận được:
 ```json
 {
   "event": "message_created", // hoặc "message_updated", "conversation_status_changed", "conversation_updated"
@@ -79,9 +79,9 @@ Toàn bộ thông tin cập nhật từ Chatwoot sẽ được phát qua kênh s
 ### Code mẫu xử lý sự kiện trong ứng dụng (React/Vue/JS):
 
 ```javascript
-socket.on("chatwoot_event", (data) => {
+socket.on("messaging_event", (data) => {
   const { event, payload } = data;
-  console.log(`Nhận sự kiện Chatwoot real-time [${event}]:`, payload);
+  console.log(`Nhận sự kiện messaging real-time [${event}]:`, payload);
 
   switch (event) {
     case "message_created":
@@ -109,13 +109,13 @@ socket.on("chatwoot_event", (data) => {
 ### 4.1 Sự kiện tin nhắn mới (`message_created`)
 Được kích hoạt khi khách hàng nhắn tin hoặc một agent khác gửi tin nhắn trong hội thoại.
 
-* **Đặc điểm:** Trường `sender.id` của agent gửi tin nhắn đã được Backend tự động đổi từ ID số nguyên của Chatwoot sang **UUID của User** trong hệ thống nội bộ của bạn.
+* **Đặc điểm:** Trường `sender.id` của agent gửi tin nhắn đã được Backend tự động đổi từ ID số nguyên của messaging sang **UUID của User** trong hệ thống nội bộ của bạn.
 * **Xử lý State:**
 
 ```javascript
 function handleRealtimeMessageCreated(messagePayload) {
   const newRawMessage = messagePayload;
-  const conversationId = newRawMessage.conversation.id; // Chatwoot Conversation ID (int)
+  const conversationId = newRawMessage.conversation.id; // messaging Conversation ID (int)
 
   // 1. Nếu đang hiển thị hội thoại này, append tin nhắn mới vào danh sách
   if (currentActiveConversation && currentActiveConversation.id === conversationId) {
@@ -167,5 +167,5 @@ function handleRealtimeConversationUpdated(payload) {
 ---
 
 ## 5. Mẹo & Thực hành tốt nhất (Best Practices)
-1. **Đồng bộ hóa Client-side:** Sử dụng trường `id` của tin nhắn (`message.id` của Chatwoot) làm khóa chính (`key` trong React/Vue) để ngăn ngừa hiển thị trùng lặp tin nhắn khi Agent gửi đi (người gửi vừa tạo tin cục bộ trên UI vừa nhận được sự kiện qua socket).
+1. **Đồng bộ hóa Client-side:** Sử dụng trường `id` của tin nhắn (`message.id` của messaging) làm khóa chính (`key` trong React/Vue) để ngăn ngừa hiển thị trùng lặp tin nhắn khi Agent gửi đi (người gửi vừa tạo tin cục bộ trên UI vừa nhận được sự kiện qua socket).
 2. **Reconnection (Tự động kết nối lại):** Khi kết nối socket bị ngắt và kết nối lại, Backend sẽ tự động phát các thông báo bị lỡ (`missed_notifications`). Tuy nhiên đối với tin nhắn hội thoại, Frontend nên gọi lại API `GET /conversations/{id}/messages` để lấy đầy đủ lịch sử tin nhắn mới nhất nhằm phòng tránh mất gói tin lúc offline.

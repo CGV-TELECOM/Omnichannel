@@ -29,7 +29,7 @@ async def get_level(
     request: Request,
     level_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _ = Depends(has_permission("view_level_by_id")),
+    _ = Depends(has_permission("view_levels")),
     current_user: User = Depends(get_current_user_dependency)
 ):
     return await handle_level.get_level_by_id(level_id, db, current_user)

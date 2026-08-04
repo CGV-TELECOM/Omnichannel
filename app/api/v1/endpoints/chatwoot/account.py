@@ -8,7 +8,13 @@ from app.core.config.logging import log_user_action
 from app.core.dependencies.dependencies import get_current_user_dependency
 from app.core.security.permissions import has_permission
 from app.db.models import User
-from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody, ChatwootBulkActionLabelsBody, ChatwootCustomFiltersBody, ChatwootActionAgentInboxesBody
+from app.schemas.requests.chatwoot import (
+    ChatwootProvisionAccountBody,
+    ChatwootUpdateAccountBody,
+    ChatwootBulkActionLabelsBody,
+    ChatwootCustomFiltersBody,
+    ChatwootActionAgentInboxesBody,
+)
 from app.services.v1 import handle_chatwoot
 
 router = APIRouter()
@@ -19,7 +25,7 @@ router = APIRouter()
 async def provision_chatwoot_account(
     request: Request,
     body: ChatwootProvisionAccountBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("create_messaging_account")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -30,7 +36,7 @@ async def provision_chatwoot_account(
 async def get_chatwoot_account(
     request: Request,
     tenant_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("view_messaging_accounts")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -43,7 +49,7 @@ async def update_chatwoot_account(
     request: Request,
     tenant_id: UUID,
     body: ChatwootUpdateAccountBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("edit_messaging_account")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -57,7 +63,7 @@ async def update_chatwoot_account(
 async def delete_chatwoot_account(
     request: Request,
     tenant_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("delete_messaging_account")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -69,7 +75,7 @@ async def delete_chatwoot_account(
 async def sync_chatwoot_integration_account_user(
     request: Request,
     tenant_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("sync_messaging_integration")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -77,13 +83,14 @@ async def sync_chatwoot_integration_account_user(
         request, current_user, tenant_id, db
     )
 
-@router.post("/accounts/{tenant_id}/bulk_actions") 
+
+@router.post("/accounts/{tenant_id}/bulk_actions")
 @log_user_action("chatwootBulkActionLabels")
 async def bulk_action_labels(
     request: Request,
     tenant_id: UUID,
     body: ChatwootBulkActionLabelsBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("bulk_messaging_actions")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -91,13 +98,14 @@ async def bulk_action_labels(
         request, current_user, tenant_id, body, db
     )
 
-@router.post("/accounts/{tenant_id}/inbox_members") 
+
+@router.post("/accounts/{tenant_id}/inbox_members")
 @log_user_action("chatwootActionAgentInboxes")
 async def action_agent_inboxes(
     request: Request,
     tenant_id: UUID,
     body: ChatwootActionAgentInboxesBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("manage_messaging_inbox_members")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -105,13 +113,14 @@ async def action_agent_inboxes(
         request, current_user, tenant_id, body, db
     )
 
-@router.patch("/accounts/{tenant_id}/inbox_members") 
+
+@router.patch("/accounts/{tenant_id}/inbox_members")
 @log_user_action("chatwootPatchAgentInboxes")
 async def patch_agent_inboxes(
     request: Request,
     tenant_id: UUID,
     body: ChatwootActionAgentInboxesBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("manage_messaging_inbox_members")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -125,6 +134,7 @@ async def patch_agent_inboxes(
 async def get_custom_filters_route(
     request: Request,
     tenant_id: UUID,
+    _=Depends(has_permission("view_messaging_custom_filters")),
     current_user: User = Depends(get_current_user_dependency),
     db: AsyncSession = Depends(get_db),
 ):
@@ -135,19 +145,21 @@ async def get_custom_filters_route(
         db=db,
     )
 
+
 @router.post("/accounts/{tenant_id}/custom_filters")
 @log_user_action("chatwootCustomFilters")
 async def custom_filters(
     request: Request,
     tenant_id: UUID,
     body: ChatwootCustomFiltersBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("create_messaging_custom_filter")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
     return await handle_chatwoot.custom_filters(
         request, current_user, tenant_id, body, db
     )
+
 
 @router.patch(
     "/accounts/{tenant_id}/custom_filters/{filter_id}"
@@ -158,7 +170,7 @@ async def update_custom_filter_route(
     tenant_id: UUID,
     filter_id: int,
     body: ChatwootCustomFiltersBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("edit_messaging_custom_filter")),
     current_user: User = Depends(get_current_user_dependency),
     db: AsyncSession = Depends(get_db),
 ):
@@ -180,7 +192,7 @@ async def delete_custom_filter_route(
     request: Request,
     tenant_id: UUID,
     filter_id: int,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("delete_messaging_custom_filter")),
     current_user: User = Depends(get_current_user_dependency),
     db: AsyncSession = Depends(get_db),
 ):

@@ -6,7 +6,7 @@ import datetime
 
 async def seed_specific_permission(db: AsyncSession):
     role_id = UUID("019b8bea-cc2d-7967-bce5-55008e6e286e")
-    permission_name = "view_department_by_id"
+    permission_name = "view_departments"
 
     # 1. Kiểm tra hoặc tạo Permission
     stmt_perm = select(Permission).filter_by(name=permission_name)

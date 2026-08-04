@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from . import account, agent_bots, agents, conversations, users, teams
 
-router = APIRouter(prefix="/chatwoot", tags=["Chatwoot"])
+router = APIRouter(prefix="/messaging", tags=["Messaging"])
 router.include_router(account.router)
 router.include_router(conversations.router)
 router.include_router(users.router)

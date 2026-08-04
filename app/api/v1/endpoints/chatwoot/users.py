@@ -20,7 +20,7 @@ async def create_chatwoot_user(
     request: Request,
     user_id: UUID,
     body: ChatwootUserCreateBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("create_messaging_user")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -31,7 +31,7 @@ async def create_chatwoot_user(
 async def get_chatwoot_user(
     request: Request,
     user_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("view_messaging_users")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -44,7 +44,7 @@ async def update_chatwoot_user(
     request: Request,
     user_id: UUID,
     body: ChatwootUserUpdateBody,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("edit_messaging_user")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -56,7 +56,7 @@ async def update_chatwoot_user(
 async def delete_chatwoot_user(
     request: Request,
     user_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("delete_messaging_user")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -67,7 +67,7 @@ async def delete_chatwoot_user(
 async def get_chatwoot_user_sso_link(
     request: Request,
     user_id: UUID,
-    _=Depends(has_permission("view_roles")),
+    _=Depends(has_permission("view_messaging_users")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):

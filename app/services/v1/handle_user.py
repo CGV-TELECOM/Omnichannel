@@ -50,7 +50,7 @@ def _merge_chatwoot_agent_payload(
     meta_data: dict[str, Any] | None,
     core: dict[str, Any],
 ) -> dict[str, Any]:
-    """Gộp meta_data thành payload Agent Chatwoot (phẳng, không gửi key `chatwoot_agent`).
+    """Gộp meta_data thành payload Agent messaging (phẳng, không gửi key `chatwoot_agent`).
 
     Thứ tự: flatten `meta_data.chatwoot_agent` trước, sau đó các key **root** của meta_data
     (trừ `chatwoot_agent`) ghi đè — để `meta_data.role` ở root không bị snapshot cũ trong
@@ -78,7 +78,7 @@ def _merge_chatwoot_agent_payload(
 
 
 def _meta_data_triggers_chatwoot_agent_sync(meta: Any) -> bool:
-    """True nếu client gửi meta_data có nội dung dùng để đồng bộ Agent Chatwoot (không chỉ object rỗng)."""
+    """True nếu client gửi meta_data có nội dung dùng để đồng bộ Agent messaging (không chỉ object rỗng)."""
     if not isinstance(meta, dict) or not meta:
         return False
     nested = meta.get("chatwoot_agent")
@@ -513,7 +513,7 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.BAD_REQUEST,
-                message="Người dùng phải thuộc một tenant để đồng bộ Agent Chatwoot",
+                message="Người dùng phải thuộc một tenant để đồng bộ Agent messaging",
             )
         
         # Check username exists trong cùng tenant (không cho phép trùng username trong cùng tenant)
@@ -594,7 +594,7 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.BAD_REQUEST,
-                message="Tenant chưa được map với Chatwoot account, không thể tạo Agent",
+                message="Tenant chưa được map với messaging account, không thể tạo Agent",
             )
 
         chatwoot_core = {
@@ -625,10 +625,10 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
                 status_code=chatwoot_res.status_code
                 if chatwoot_res.status_code in (401, 404, 409, 422, 503)
                 else 502,
-                message="Tạo agent trên Chatwoot thất bại, đã rollback tạo user nội bộ",
+                message="Tạo agent trên messaging thất bại, đã rollback tạo user nội bộ",
                 data={
-                    "chatwoot_status_code": chatwoot_res.status_code,
-                    "chatwoot_response": chatwoot_res.data,
+                    "messaging_status_code": chatwoot_res.status_code,
+                    "messaging_response": chatwoot_res.data,
                 },
             )
         try:
@@ -638,8 +638,8 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=502,
-                message="Chatwoot trả id agent không hợp lệ, đã rollback tạo user nội bộ",
-                data={"chatwoot_response": chatwoot_res.data},
+                message="Messaging trả id agent không hợp lệ, đã rollback tạo user nội bộ",
+                data={"messaging_response": chatwoot_res.data},
             )
 
         db.add(
@@ -672,7 +672,7 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
-                message="Lỗi commit CSDL, đã rollback và hủy agent Chatwoot",
+                message="Lỗi commit CSDL, đã rollback và hủy agent messaging",
             )
 
         await db.refresh(new_user)
@@ -688,7 +688,7 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
             "is_active": new_user.is_active,
             "tenant_id": new_user.tenant_id,
             "meta_data": new_user.meta_data,
-            "chatwoot_synced": True,
+            "messaging_synced": True,
         }
 
         return api_response(
@@ -791,7 +791,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.BAD_REQUEST,
-                message="Không hỗ trợ đổi tenant cho user đã đồng bộ Chatwoot. Hãy tạo user mới trong tenant đích",
+                message="Không hỗ trợ đổi tenant cho user đã đồng bộ messaging. Hãy tạo user mới trong tenant đích",
             )
         
         # Check username unique trong cùng tenant khi update (nếu đổi username)
@@ -839,7 +839,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
 
         md_source_agent = _prospective_user_meta_for_sync(user, update_data)
         scalar_cw = bool(chatwoot_payload)
-        # Toàn bộ meta_data dùng cho Chatwoot Agent: bất kỳ key nào (role, password, chatwoot_agent, …) đều kích hoạt sync.
+        # Toàn bộ meta_data dùng cho messaging Agent: bất kỳ key nào (role, password, chatwoot_agent, …) đều kích hoạt sync.
         meta_chatwoot_sync = "meta_data" in update_data and _meta_data_triggers_chatwoot_agent_sync(
             update_data.get("meta_data")
         )
@@ -847,7 +847,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
         sync_agent = (scalar_cw or meta_chatwoot_sync) and not requested_deactivate
         chatwoot_merged: dict[str, Any] | None = None
 
-        # Nếu disable user bằng update API thì bắt buộc xóa agent trên Chatwoot trước.
+        # Nếu disable user bằng update API thì bắt buộc xóa agent trên messaging trước.
         if requested_deactivate:
             if user_chatwoot_map is not None:
                 if user.tenant_id is not None:
@@ -863,10 +863,10 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                                 status_code=cw_del_res.status_code
                                 if cw_del_res.status_code in (401, 403, 404, 422, 503)
                                 else 502,
-                                message="Không thể vô hiệu hóa vì xóa agent trên Chatwoot thất bại",
+                                message="Không thể vô hiệu hóa vì xóa agent trên messaging thất bại",
                                 data={
-                                    "chatwoot_status_code": cw_del_res.status_code,
-                                    "chatwoot_response": cw_del_res.data,
+                                    "messaging_status_code": cw_del_res.status_code,
+                                    "messaging_response": cw_del_res.data,
                                 },
                             )
                 await db.delete(user_chatwoot_map)
@@ -878,7 +878,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                 return api_response(
                     status=ResponseStatus.ERROR,
                     status_code=ResponseStatusCode.BAD_REQUEST,
-                    message="Tenant chưa được map với Chatwoot account, không thể cập nhật Agent",
+                    message="Tenant chưa được map với messaging account, không thể cập nhật Agent",
                 )
             core_cw: dict[str, Any] = {"role": "agent"}
             core_cw.update(chatwoot_payload)
@@ -902,7 +902,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     return api_response(
                         status=ResponseStatus.ERROR,
                         status_code=ResponseStatusCode.BAD_REQUEST,
-                        message="User không có email để tạo Agent Chatwoot",
+                        message="User không có email để tạo Agent messaging",
                     )
                 create_res = await chatwoot_client.application_request(
                     "POST",
@@ -919,10 +919,10 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                         status_code=create_res.status_code
                         if create_res.status_code in (401, 404, 409, 422, 503)
                         else 502,
-                        message="Tạo Agent trên Chatwoot thất bại",
+                        message="Tạo Agent trên messaging thất bại",
                         data={
-                            "chatwoot_status_code": create_res.status_code,
-                            "chatwoot_response": create_res.data,
+                            "messaging_status_code": create_res.status_code,
+                            "messaging_response": create_res.data,
                         },
                     )
                 try:
@@ -931,8 +931,8 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     return api_response(
                         status=ResponseStatus.ERROR,
                         status_code=502,
-                        message="Chatwoot trả id agent không hợp lệ",
-                        data={"chatwoot_response": create_res.data},
+                        message="Messaging trả id agent không hợp lệ",
+                        data={"messaging_response": create_res.data},
                     )
                 user_chatwoot_map = ChatwootLegacyMap(
                     resource_type=ChatwootMapResourceType.USER,
@@ -964,7 +964,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                         return api_response(
                             status=ResponseStatus.ERROR,
                             status_code=ResponseStatusCode.BAD_REQUEST,
-                            message="User không có email để tạo lại Agent Chatwoot",
+                            message="User không có email để tạo lại Agent messaging",
                         )
                     create_res = await chatwoot_client.application_request(
                         "POST",
@@ -981,10 +981,10 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                             status_code=create_res.status_code
                             if create_res.status_code in (401, 404, 409, 422, 503)
                             else 502,
-                            message="Agent Chatwoot không tồn tại và tái tạo thất bại",
+                            message="Agent messaging không tồn tại và tái tạo thất bại",
                             data={
-                                "chatwoot_status_code": create_res.status_code,
-                                "chatwoot_response": create_res.data,
+                                "messaging_status_code": create_res.status_code,
+                                "messaging_response": create_res.data,
                             },
                         )
                     try:
@@ -993,8 +993,8 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                         return api_response(
                             status=ResponseStatus.ERROR,
                             status_code=502,
-                            message="Chatwoot trả id agent không hợp lệ",
-                            data={"chatwoot_response": create_res.data},
+                            message="Messaging trả id agent không hợp lệ",
+                            data={"messaging_response": create_res.data},
                         )
                     user_chatwoot_map.chatwoot_id = new_agent_id
                     user.chat_id = new_agent_id
@@ -1005,10 +1005,10 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                         status_code=cw_res.status_code
                         if cw_res.status_code in (401, 404, 409, 422, 503)
                         else 502,
-                        message="Cập nhật agent trên Chatwoot thất bại",
+                        message="Cập nhật agent trên messaging thất bại",
                         data={
-                            "chatwoot_status_code": cw_res.status_code,
-                            "chatwoot_response": cw_res.data,
+                            "messaging_status_code": cw_res.status_code,
+                            "messaging_response": cw_res.data,
                         },
                     )
         
@@ -1047,7 +1047,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
             "is_active": user.is_active,
             "tenant_id": user.tenant_id,
             "meta_data": user.meta_data,
-            "chatwoot_synced": user_chatwoot_map is not None,
+            "messaging_synced": user_chatwoot_map is not None,
         }
 
         return api_response(
@@ -1134,10 +1134,10 @@ async def soft_delete_user(user_id: UUID, db: AsyncSession, current_user: User):
                             status_code=cw_res.status_code
                             if cw_res.status_code in (401, 403, 404, 422, 503)
                             else 502,
-                            message="Xóa agent trên Chatwoot thất bại",
+                            message="Xóa agent trên messaging thất bại",
                             data={
-                                "chatwoot_status_code": cw_res.status_code,
-                                "chatwoot_response": cw_res.data,
+                                "messaging_status_code": cw_res.status_code,
+                                "messaging_response": cw_res.data,
                             },
                         )
             await db.delete(user_chatwoot_map)
@@ -1205,7 +1205,7 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.BAD_REQUEST,
-                message="User chưa thuộc tenant, không thể đồng bộ Agent Chatwoot",
+                message="User chưa thuộc tenant, không thể đồng bộ Agent messaging",
             )
 
         account_id = await _get_chatwoot_account_id_for_tenant(db, user.tenant_id)
@@ -1213,7 +1213,7 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.BAD_REQUEST,
-                message="Tenant chưa được map với Chatwoot account",
+                message="Tenant chưa được map với messaging account",
             )
 
         user_map = await _get_chatwoot_user_map_by_local(db, user.id)
@@ -1246,8 +1246,8 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
                     status_code=create_res.status_code
                     if create_res.status_code in (401, 404, 409, 422, 503)
                     else 502,
-                    message="Tạo agent trên Chatwoot thất bại",
-                    data={"chatwoot_response": create_res.data},
+                    message="Tạo agent trên messaging thất bại",
+                    data={"messaging_response": create_res.data},
                 )
             try:
                 agent_id = int(create_res.data["id"])
@@ -1255,8 +1255,8 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
                 return api_response(
                     status=ResponseStatus.ERROR,
                     status_code=502,
-                    message="Chatwoot trả id agent không hợp lệ",
-                    data={"chatwoot_response": create_res.data},
+                    message="Messaging trả id agent không hợp lệ",
+                    data={"messaging_response": create_res.data},
                 )
             created_agent_id = agent_id
         else:
@@ -1281,8 +1281,8 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
                         status_code=recreate_res.status_code
                         if recreate_res.status_code in (401, 404, 409, 422, 503)
                         else 502,
-                        message="Không thể tái tạo agent trên Chatwoot",
-                        data={"chatwoot_response": recreate_res.data},
+                        message="Không thể tái tạo agent trên messaging",
+                        data={"messaging_response": recreate_res.data},
                     )
                 try:
                     agent_id = int(recreate_res.data["id"])
@@ -1290,8 +1290,8 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
                     return api_response(
                         status=ResponseStatus.ERROR,
                         status_code=502,
-                        message="Chatwoot trả id agent không hợp lệ",
-                        data={"chatwoot_response": recreate_res.data},
+                        message="Messaging trả id agent không hợp lệ",
+                        data={"messaging_response": recreate_res.data},
                     )
                 created_agent_id = agent_id
             elif patch_res.status_code != 200:
@@ -1300,8 +1300,8 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
                     status_code=patch_res.status_code
                     if patch_res.status_code in (401, 404, 409, 422, 503)
                     else 502,
-                    message="Không thể cập nhật agent Chatwoot hiện có",
-                    data={"chatwoot_response": patch_res.data},
+                    message="Không thể cập nhật agent messaging hiện có",
+                    data={"messaging_response": patch_res.data},
                 )
 
         if user_map is None:
@@ -1335,19 +1335,19 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
-                message="Lỗi commit CSDL, đã rollback và hủy agent Chatwoot",
+                message="Lỗi commit CSDL, đã rollback và hủy agent messaging",
             )
         await db.refresh(user)
 
         return api_response(
             status=ResponseStatus.SUCCESS,
             status_code=ResponseStatusCode.OK,
-            message="Đồng bộ user nội bộ thành Chatwoot Agent thành công",
+            message="Đồng bộ user nội bộ thành messaging Agent thành công",
             data={
                 "user_id": user.id,
                 "tenant_id": user.tenant_id,
                 "meta_data": user.meta_data,
-                "chatwoot_synced": True,
+                "messaging_synced": True,
             },
         )
     except SQLAlchemyError as e:

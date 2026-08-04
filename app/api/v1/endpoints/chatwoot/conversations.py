@@ -15,7 +15,6 @@ from app.schemas.requests.chatwoot import (
     ChatwootConversationLabelsMutationBody,
     ChatwootConversationToggleStatusBody,
     ChatwootConversationTypingBody,
-    ConversationFilter,
     ConversationFilterRequest,
 )
 from app.services.v1 import handle_chatwoot
@@ -27,10 +26,10 @@ router = APIRouter()
 async def list_tenant_inboxes(
     request: Request,
     tenant_id: UUID,
+    _=Depends(has_permission("view_messaging_inboxes")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """GET /api/v1/accounts/{account_id}/inboxes — listAllInboxes."""
     return await handle_chatwoot.list_inboxes(request, current_user, tenant_id, db)
 
 
@@ -40,10 +39,10 @@ async def create_tenant_inbox(
     request: Request,
     tenant_id: UUID,
     body: ChatwootApplicationJsonBody,
+    _=Depends(has_permission("create_messaging_inbox")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """POST /api/v1/accounts/{account_id}/inboxes — body giống Chatwoot `inbox_create_payload`."""
     return await handle_chatwoot.create_inbox(request, current_user, tenant_id, body, db)
 
 
@@ -52,10 +51,10 @@ async def get_tenant_inbox(
     request: Request,
     tenant_id: UUID,
     inbox_id: int,
+    _=Depends(has_permission("view_messaging_inboxes")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """GET /api/v1/accounts/{account_id}/inboxes/{id}."""
     return await handle_chatwoot.get_inbox(request, current_user, tenant_id, inbox_id, db)
 
 
@@ -66,10 +65,10 @@ async def update_tenant_inbox(
     tenant_id: UUID,
     inbox_id: int,
     body: ChatwootApplicationJsonBody,
+    _=Depends(has_permission("edit_messaging_inbox")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """PATCH /api/v1/accounts/{account_id}/inboxes/{id}."""
     return await handle_chatwoot.update_inbox(
         request, current_user, tenant_id, inbox_id, body, db
     )
@@ -79,10 +78,10 @@ async def update_tenant_inbox(
 async def list_tenant_labels(
     request: Request,
     tenant_id: UUID,
+    _=Depends(has_permission("view_messaging_labels")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """GET /api/v1/accounts/{account_id}/labels."""
     return await handle_chatwoot.list_labels(request, current_user, tenant_id, db)
 
 
@@ -92,10 +91,10 @@ async def create_tenant_label(
     request: Request,
     tenant_id: UUID,
     body: ChatwootApplicationJsonBody,
+    _=Depends(has_permission("create_messaging_label")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """POST /api/v1/accounts/{account_id}/labels."""
     return await handle_chatwoot.create_label(request, current_user, tenant_id, body, db)
 
 
@@ -105,10 +104,10 @@ async def delete_tenant_label(
     request: Request,
     tenant_id: UUID,
     label: str,
+    _=Depends(has_permission("delete_messaging_label")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """DELETE /api/v1/accounts/{account_id}/labels/{label_title}."""
     return await handle_chatwoot.delete_label(request, current_user, tenant_id, label, db)
 
 
@@ -119,37 +118,40 @@ async def list_tenant_conversations(
     status: str | None = Query(None, description="Trạng thái: open, resolved, pending, snoozed, all"),
     assignee_type: str | None = Query(None, description="Loại assignee: me, unassigned, all, assigned"),
     team_id: UUID | None = Query(None, description="UUID team trong contact-center (bảng map)"),
-    inbox_id: int | None = Query(None, description="ID inbox trên Chatwoot"),
+    inbox_id: int | None = Query(None, description="ID inbox"),
     page: int | None = Query(None, description="Số trang (mặc định 1)"),
     sort_by: str | None = Query(None, description="Sắp xếp: last_activity_at_desc, last_activity_at_asc, created_at_desc, etc."),
     q: str | None = Query(None, description="Từ khóa tìm kiếm"),
     labels: str | None = Query(None, description="Nhãn conversation"),
+    _=Depends(has_permission("view_messaging_conversations")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """GET /api/v1/accounts/{account_id}/conversations."""
     return await handle_chatwoot.list_conversations(
         request, current_user, tenant_id, db
     )
+
 
 @router.delete("/tenants/{tenant_id}/conversations/{conversation_id}")
 async def delete_tenant_conversation(
     request: Request,
     tenant_id: UUID,
     conversation_id: int,
+    _=Depends(has_permission("delete_messaging_conversation")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """DELETE /api/v1/accounts/{account_id}/conversations/{conversation_id}."""
     return await handle_chatwoot.delete_conversation(
         request, current_user, tenant_id, conversation_id, db
-)
+    )
+
 
 @router.post("/tenants/{tenant_id}/conversations/filter")
 async def filter_tenant_conversations(
     request: Request,
     tenant_id: UUID,
     body: ConversationFilterRequest,
+    _=Depends(has_permission("view_messaging_conversations")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -168,10 +170,10 @@ async def create_tenant_conversation(
     request: Request,
     tenant_id: UUID,
     body: ChatwootApplicationJsonBody,
+    _=Depends(has_permission("create_messaging_conversation")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """POST /api/v1/accounts/{account_id}/conversations — `source_id` + `inbox_id` theo doc Chatwoot."""
     return await handle_chatwoot.create_conversation(
         request, current_user, tenant_id, body, db
     )
@@ -182,6 +184,7 @@ async def get_tenant_conversation(
     request: Request,
     tenant_id: UUID,
     conversation_id: int,
+    _=Depends(has_permission("view_messaging_conversations")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -197,10 +200,10 @@ async def update_tenant_conversation(
     tenant_id: UUID,
     conversation_id: int,
     body: ChatwootApplicationJsonBody,
+    _=Depends(has_permission("edit_messaging_conversation")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """PATCH /api/v1/accounts/{account_id}/conversations/{conversation_id}."""
     return await handle_chatwoot.update_conversation(
         request, current_user, tenant_id, conversation_id, body, db
     )
@@ -211,6 +214,7 @@ async def list_tenant_conversation_messages(
     request: Request,
     tenant_id: UUID,
     conversation_id: int,
+    _=Depends(has_permission("view_messaging_conversations")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -226,10 +230,10 @@ async def create_tenant_conversation_message(
     tenant_id: UUID,
     conversation_id: int,
     body: ChatwootApplicationJsonBody,
+    _=Depends(has_permission("send_messaging_message")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/messages — gửi tin (body giống Chatwoot)."""
     return await handle_chatwoot.create_conversation_message(
         request, current_user, tenant_id, conversation_id, body, db
     )
@@ -242,10 +246,10 @@ async def delete_tenant_conversation_message(
     tenant_id: UUID,
     conversation_id: int,
     message_id: int,
+    _=Depends(has_permission("delete_messaging_message")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """DELETE .../messages/{message_id} — Chatwoot Application API."""
     return await handle_chatwoot.delete_conversation_message(
         request, current_user, tenant_id, conversation_id, message_id, db
     )
@@ -258,10 +262,10 @@ async def toggle_tenant_conversation_status(
     tenant_id: UUID,
     conversation_id: int,
     body: ChatwootConversationToggleStatusBody,
+    _=Depends(has_permission("edit_messaging_conversation")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """POST .../toggle_status."""
     return await handle_chatwoot.toggle_conversation_status(
         request, current_user, tenant_id, conversation_id, body, db
     )
@@ -272,10 +276,10 @@ async def get_tenant_conversation_labels(
     request: Request,
     tenant_id: UUID,
     conversation_id: int,
+    _=Depends(has_permission("view_messaging_conversations")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """GET .../labels."""
     return await handle_chatwoot.get_conversation_labels(
         request, current_user, tenant_id, conversation_id, db
     )
@@ -288,10 +292,10 @@ async def set_tenant_conversation_labels(
     tenant_id: UUID,
     conversation_id: int,
     body: ChatwootConversationLabelsMutationBody,
+    _=Depends(has_permission("edit_messaging_conversation")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """POST .../labels — ghi đè toàn bộ label."""
     return await handle_chatwoot.set_conversation_labels(
         request, current_user, tenant_id, conversation_id, body, db
     )
@@ -304,10 +308,10 @@ async def toggle_tenant_conversation_typing(
     tenant_id: UUID,
     conversation_id: int,
     body: ChatwootConversationTypingBody,
+    _=Depends(has_permission("edit_messaging_conversation")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """POST .../toggle_typing_status."""
     return await handle_chatwoot.toggle_conversation_typing(
         request, current_user, tenant_id, conversation_id, body, db
     )
@@ -320,10 +324,10 @@ async def update_tenant_conversation_custom_attributes(
     tenant_id: UUID,
     conversation_id: int,
     body: ChatwootConversationCustomAttributesBody,
+    _=Depends(has_permission("edit_messaging_conversation")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """POST .../custom_attributes."""
     return await handle_chatwoot.update_conversation_custom_attributes(
         request, current_user, tenant_id, conversation_id, body, db
     )
@@ -336,6 +340,7 @@ async def assign_tenant_conversation(
     tenant_id: UUID,
     conversation_id: int,
     body: ChatwootConversationAssignBody,
+    _=Depends(has_permission("assign_messaging_conversation")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
@@ -343,28 +348,30 @@ async def assign_tenant_conversation(
         current_user, tenant_id, conversation_id, body, db
     )
 
+
 @router.get("/tenants/{tenant_id}/conversations/{conversation_id}/attachments")
 async def list_tenant_conversation_attachments(
     request: Request,
     tenant_id: UUID,
     conversation_id: int,
+    _=Depends(has_permission("view_messaging_conversations")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """GET .../attachments."""
     return await handle_chatwoot.get_attachment(
         request, current_user, tenant_id, conversation_id, db
     )
+
 
 @router.post("/tenants/{tenant_id}/conversations/{conversation_id}/update_last_seen")
 async def update_tenant_conversation_last_seen(
     request: Request,
     tenant_id: UUID,
     conversation_id: int,
+    _=Depends(has_permission("edit_messaging_conversation")),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
 ):
-    """POST .../update_last_seen."""
     return await handle_chatwoot.update_last_seen(
         request,
         current_user,
