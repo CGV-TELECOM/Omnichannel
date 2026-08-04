@@ -283,6 +283,10 @@ class ChatwootBulkActionLabelsBody(BaseModel):
     labels: dict[str, list[str]] = Field(default_factory=dict)
     fields: dict[str, Any] = Field(default_factory=dict)
 
+class ChatwootActionAgentInboxesBody(BaseModel):
+    inbox_id: int
+    user_ids: list[int] = Field(default_factory=list)
+
 class ConversationFilter(BaseModel):
     """Shape filter conversation khi gọi GET /api/v1/accounts/{account_id}/conversations."""
     attribute_key: str

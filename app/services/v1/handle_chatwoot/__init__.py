@@ -11,7 +11,9 @@ from app.services.v1.handle_chatwoot.account import (
     custom_filters,
     get_custom_filters,
     update_custom_filter,
-    delete_custom_filter
+    delete_custom_filter,
+    add_new_agent_inboxes,
+    patch_new_agent_inboxes
 )
 from app.services.v1.handle_chatwoot.agent_bots import (
     create_account_agent_bot,
@@ -116,6 +118,7 @@ __all__ = [
     "list_conversation_messages",
     "list_conversations",
     "list_inboxes",
+    "add_new_agent_inboxes",
     "list_labels",
     "list_teams",
     "create_team",

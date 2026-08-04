@@ -74,16 +74,7 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
                 "Tìm tenant theo ID thành công",
-                TenantResponse(
-                    id=result_tenant.id,
-                    name=result_tenant.name,
-                    description=result_tenant.description,
-                    is_active=result_tenant.is_active,
-                    meta_data=result_tenant.meta_data,
-                    graph_id=result_tenant.graph_id,
-                    agent_id=result_tenant.agent_id,
-                    graph_activated=result_tenant.graph_activated,
-                )
+                TenantResponse.model_validate(result_tenant)
             )
         else:
             query = select(Tenant)
@@ -115,16 +106,7 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
             tenants = result.scalars().all()
 
             tenant_list = [
-                TenantResponse(
-                    id=t.id,
-                    name=t.name,
-                    description=t.description,
-                    is_active=t.is_active,
-                    meta_data=t.meta_data,
-                    graph_id=t.graph_id,
-                    agent_id=t.agent_id,
-                    graph_activated=t.graph_activated,
-                )
+                TenantResponse.model_validate(t)
                 for t in tenants
             ]
 
@@ -190,6 +172,7 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             graph_id=tenant_data.graph_id,
             agent_id=tenant_data.agent_id,
             graph_activated=tenant_data.graph_activated if tenant_data.graph_activated is not None else 0,
+            webcall_config=tenant_data.webcall_config,
         )
         db.add(new_tenant)
         await db.flush()
@@ -410,16 +393,7 @@ async def updateTenant(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,
             "Cập nhật tenant thành công",
-            data=TenantResponse(
-                id=tenant.id,
-                name=tenant.name,
-                description=tenant.description,
-                is_active=tenant.is_active,
-                meta_data=tenant.meta_data,
-                graph_id=tenant.graph_id,
-                agent_id=tenant.agent_id,
-                graph_activated=tenant.graph_activated,
-            ),
+            data=TenantResponse.model_validate(tenant),
         )
 
     except SQLAlchemyError as e:

@@ -175,7 +175,16 @@ class Tenant(Base):
     graph_activated = Column(Integer, default=0) # 0: chưa kích hoạt, 1: đã kích hoạt
     # manhnx - merge graph: 18-06-2026
     meta_data = Column(JSONB, nullable=True, default=lambda: {"chatbot_enabled": True, "default_responder": "bot"})
-
+    # manhnx 30-07-2026: thêm trường để cấu hình webcall
+    webcall_config = Column(JSONB, nullable=True, default=lambda: {
+        "enable_widget": True, 
+        "sip_only": True, 
+        "sip_domain": "",   
+        "ws_server": "", 
+        "sip_password": "", 
+        "api_key": ""
+    })
+    
 
 # manhnx - 18-06-2026: lưu lại thông tin được cung cấp từ KH
 class CustomerProvidedInfo(Base):
@@ -515,3 +524,40 @@ class ChatwootLegacyMap(Base):
             postgresql_where=text("resource_type = 'user'"),
         ),
     )
+
+
+class CallLog(Base):
+    __tablename__ = "call_logs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Định danh cuộc gọi từ tổng đài
+    sip_call_id = Column(String(255), unique=True, nullable=False, index=True) 
+
+    # Khớp nối thông tin ngữ cảnh (Context)
+    customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL"), nullable=True, index=True)
+    ticket_id = Column(UUID(as_uuid=True), ForeignKey("tickets.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True) # Agent thực hiện cuộc gọi
+
+    # Thông tin cuộc gọi
+    direction = Column(String(20), default="outbound", nullable=False) # inbound hoặc outbound
+    phone_number = Column(String(20), nullable=False) # Số điện thoại của khách hàng
+    status = Column(String(50), nullable=True) # ringing, answered, ended, busy, missed...
+    
+    # Thời gian & File ghi âm
+    started_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
+    ended_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    duration = Column(Integer, default=0) # Thời lượng cuộc gọi (giây)
+    recording_url = Column(String(512), nullable=True) # Đường dẫn file ghi âm cuộc gọi
+    
+    # Metadata mở rộng
+    meta_data = Column(JSONB, nullable=True)
+    
+    created_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    tenant = relationship("Tenant", backref="call_logs")
+    customer = relationship("Customer", backref="call_logs")
+    ticket = relationship("Ticket", backref="call_logs")
+    user = relationship("User", backref="call_logs")

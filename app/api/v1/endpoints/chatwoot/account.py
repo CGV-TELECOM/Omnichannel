@@ -8,7 +8,7 @@ from app.core.config.logging import log_user_action
 from app.core.dependencies.dependencies import get_current_user_dependency
 from app.core.security.permissions import has_permission
 from app.db.models import User
-from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody, ChatwootBulkActionLabelsBody, ChatwootCustomFiltersBody
+from app.schemas.requests.chatwoot import ChatwootProvisionAccountBody, ChatwootUpdateAccountBody, ChatwootBulkActionLabelsBody, ChatwootCustomFiltersBody, ChatwootActionAgentInboxesBody
 from app.services.v1 import handle_chatwoot
 
 router = APIRouter()
@@ -90,6 +90,35 @@ async def bulk_action_labels(
     return await handle_chatwoot.bulk_action_account(
         request, current_user, tenant_id, body, db
     )
+
+@router.post("/accounts/{tenant_id}/inbox_members") 
+@log_user_action("chatwootActionAgentInboxes")
+async def action_agent_inboxes(
+    request: Request,
+    tenant_id: UUID,
+    body: ChatwootActionAgentInboxesBody,
+    _=Depends(has_permission("view_roles")),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    return await handle_chatwoot.add_new_agent_inboxes(
+        request, current_user, tenant_id, body, db
+    )
+
+@router.patch("/accounts/{tenant_id}/inbox_members") 
+@log_user_action("chatwootPatchAgentInboxes")
+async def patch_agent_inboxes(
+    request: Request,
+    tenant_id: UUID,
+    body: ChatwootActionAgentInboxesBody,
+    _=Depends(has_permission("view_roles")),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    return await handle_chatwoot.patch_new_agent_inboxes(
+        request, current_user, tenant_id, body, db
+    )
+
 
 @router.get("/accounts/{tenant_id}/custom_filters")
 @log_user_action("getChatwootCustomFilters")

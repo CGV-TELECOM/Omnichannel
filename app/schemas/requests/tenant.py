@@ -30,6 +30,7 @@ class GroupBase(BaseModel):
     graph_id: Optional[UUID] = None
     agent_id: Optional[UUID] = None
     graph_activated: Optional[int] = 0
+    webcall_config: Optional[dict[str, Any]] = None
 
 class TenantCreate(GroupBase):
     pass

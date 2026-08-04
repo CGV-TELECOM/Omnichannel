@@ -39,6 +39,7 @@ from app.api.v1.endpoints.chatwoot.webhook import router as router_chatwoot_webh
 # WebSocket & Notifications
 from app.core.socket.manager import socket_manager
 from app.api.v1.endpoints.notification import router as router_notification
+from app.api.v1.endpoints.call_log import router as router_call_log
 
 # Custom JSON encoder for UUID
 def custom_jsonable_encoder(obj):
@@ -77,6 +78,7 @@ protected_routers = [
     router_customer_provided_info,
     router_notification,
     router_chatwoot,
+    router_call_log,
 ]
 
 origins = [
@@ -129,10 +131,10 @@ def websocket_status():
 # Mount Socket.IO app
 app.mount("/socket.io", socket_manager.socket_app)
 
-@app.on_event("startup")
-async def on_startup():
-   async with async_session_maker() as session:
-       await seed_rbac(session)
+# @app.on_event("startup")
+# async def on_startup():
+#    async with async_session_maker() as session:
+#        await seed_rbac(session)
 
 
 if __name__ == "__main__":
