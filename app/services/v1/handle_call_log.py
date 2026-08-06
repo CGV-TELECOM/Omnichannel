@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
 from app.db.models import CallLog, User, Tenant, Customer, Ticket
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, String
 from sqlalchemy.exc import SQLAlchemyError
 from app.schemas.requests.call_log import (
     CallLogCreate,
@@ -50,18 +50,26 @@ async def create_call_log(db: AsyncSession, current_user: User, data: CallLogCre
         new_call = CallLog(
             tenant_id=tenant_id,
             sip_call_id=data.sip_call_id,
+            provider_call_id=data.provider_call_id,
             customer_id=data.customer_id,
             ticket_id=data.ticket_id,
             user_id=data.user_id or current_user.id,
             direction=data.direction,
             phone_number=data.phone_number,
-            status=data.status or "ringing",
+            from_number=data.from_number,
+            to_number=data.to_number,
+            hotline=data.hotline,
+            status=data.status or "created",
+            source=data.source or "web",
             started_at=data.started_at or datetime.now(timezone.utc),
+            answered_at=data.answered_at,
             ended_at=data.ended_at,
             duration=data.duration or 0,
+            billsec=data.billsec or 0,
             recording_url=data.recording_url,
             meta_data=data.meta_data,
-            created_at=datetime.now(timezone.utc)
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
         )
 
         db.add(new_call)
@@ -93,7 +101,7 @@ async def create_call_log(db: AsyncSession, current_user: User, data: CallLogCre
             data=None
         )
 
-async def update_call_log(sip_call_id: str, db: AsyncSession, current_user: User, data: CallLogUpdate):
+async def update_call_log(sip_call_id: UUID, db: AsyncSession, current_user: User, data: CallLogUpdate):
     """
     Cập nhật trạng thái cuộc gọi theo sip_call_id
     """
@@ -160,7 +168,7 @@ async def update_call_log(sip_call_id: str, db: AsyncSession, current_user: User
             data=None
         )
 
-async def get_call_log_by_sip_call_id(sip_call_id: str, db: AsyncSession, current_user: User):
+async def get_call_log_by_sip_call_id(sip_call_id: UUID, db: AsyncSession, current_user: User):
     """
     Lấy thông tin chi tiết cuộc gọi qua sip_call_id (Hỗ trợ tra cứu ngược)
     """
@@ -242,7 +250,9 @@ async def get_call_logs(
             filters.append(
                 or_(
                     CallLog.phone_number.ilike(f"%{search}%"),
-                    CallLog.sip_call_id.ilike(f"%{search}%")
+                    CallLog.from_number.ilike(f"%{search}%"),
+                    CallLog.to_number.ilike(f"%{search}%"),
+                    CallLog.sip_call_id.cast(String).ilike(f"%{search}%"),
                 )
             )
 
@@ -267,7 +277,8 @@ async def get_call_logs(
         for log in call_logs:
             items.append({
                 "id": str(log.id),
-                "sip_call_id": log.sip_call_id,
+                "sip_call_id": str(log.sip_call_id),
+                "provider_call_id": str(log.provider_call_id) if log.provider_call_id else None,
                 "tenant_id": str(log.tenant_id),
                 "tenant_name": log.tenant.name if log.tenant else None,
                 "username_action_call": log.user.username if log.user else None,
@@ -275,12 +286,19 @@ async def get_call_logs(
                 "ticket_id": str(log.ticket_id) if log.ticket_id else None,
                 "user_id": str(log.user_id) if log.user_id else None,
                 "duration": log.duration,
+                "billsec": log.billsec,
                 "started_at": log.started_at.isoformat() if log.started_at else None,
+                "answered_at": log.answered_at.isoformat() if log.answered_at else None,
                 "ended_at": log.ended_at.isoformat() if log.ended_at else None,
                 "meta_data": log.meta_data,
                 "phone_number": log.phone_number,
+                "from_number": log.from_number,
+                "to_number": log.to_number,
+                "hotline": log.hotline,
                 "status": log.status,
                 "direction": log.direction,
+                "source": log.source,
+                "recording_url": log.recording_url,
                 "created_at": log.created_at.isoformat() if log.created_at else None,
             })
 

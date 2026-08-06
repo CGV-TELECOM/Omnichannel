@@ -4,7 +4,6 @@ from app.core.config.database import get_db
 from app.schemas.requests.call_log import (
     CallLogCreate,
     CallLogUpdate,
-    CallLogResponse
 )
 from app.db.models import User
 from app.core.dependencies.dependencies import get_current_user_dependency
@@ -25,13 +24,14 @@ async def create_call(
     current_user: User = Depends(get_current_user_dependency)
 ):
     """
-    Tạo bản ghi cuộc gọi mới (CallLog)
+    Tạo bản ghi cuộc gọi mới (CallLog) — dùng khi agent gọi outbound từ web.
+    sip_call_id phải là UUID (khóa map với tổng đài).
     """
     return await handle_call_log.create_call_log(db=db, current_user=current_user, data=call_log_data)
 
 @router.put("/{sip_call_id}")
 async def update_call(
-    sip_call_id: str,
+    sip_call_id: UUID,
     request: Request,
     call_log_data: CallLogUpdate,
     db: AsyncSession = Depends(get_db),
@@ -44,7 +44,7 @@ async def update_call(
 
 @router.get("/{sip_call_id}")
 async def get_call_by_id(
-    sip_call_id: str,
+    sip_call_id: UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency)

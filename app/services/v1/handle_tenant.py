@@ -18,6 +18,7 @@ from typing import Any
 
 from app.integrations.chatwoot import client as chatwoot_client
 from app.integrations.chatwoot.account_payload import sanitize_platform_account_payload
+from app.core.config.webcall_defaults import merge_webcall_config
 
 
 async def _get_tenant_account_map(
@@ -172,7 +173,7 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             graph_id=tenant_data.graph_id,
             agent_id=tenant_data.agent_id,
             graph_activated=tenant_data.graph_activated if tenant_data.graph_activated is not None else 0,
-            webcall_config=tenant_data.webcall_config,
+            webcall_config=merge_webcall_config(tenant_data.webcall_config),
         )
         db.add(new_tenant)
         await db.flush()
@@ -317,7 +318,10 @@ async def updateTenant(
             )
         
         # 4. Cập nhật dữ liệu
-        for field, value in tenant_data.model_dump(exclude_unset=True).items():
+        updates = tenant_data.model_dump(exclude_unset=True)
+        if "webcall_config" in updates:
+            updates["webcall_config"] = merge_webcall_config(updates["webcall_config"])
+        for field, value in updates.items():
             setattr(tenant, field, value)
 
         account_map = await _get_tenant_account_map(db, tenant.id)

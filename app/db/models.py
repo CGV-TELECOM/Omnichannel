@@ -6,6 +6,7 @@ from sqlalchemy.orm import relationship
 from app.core.config.database import Base
 from datetime import datetime, timedelta, timezone
 from app.core.config.app_config import settings
+from app.core.config.webcall_defaults import DEFAULT_WEBCALL_CONFIG
 from uuid6 import uuid7
 
 def generate_uuid7():
@@ -176,14 +177,12 @@ class Tenant(Base):
     # manhnx - merge graph: 18-06-2026
     meta_data = Column(JSONB, nullable=True, default=lambda: {"chatbot_enabled": True, "default_responder": "bot"})
     # manhnx 30-07-2026: thêm trường để cấu hình webcall
-    webcall_config = Column(JSONB, nullable=True, default=lambda: {
-        "enable_widget": True, 
-        "sip_only": True, 
-        "sip_domain": "",   
-        "ws_server": "", 
-        "sip_password": "", 
-        "api_key": ""
-    })
+    # domain_uuid / hotlines dùng resolve tenant khi webhook inbound (không có JWT)
+    webcall_config = Column(
+        JSONB,
+        nullable=True,
+        default=lambda: dict(DEFAULT_WEBCALL_CONFIG),
+    )
     
 
 # manhnx - 18-06-2026: lưu lại thông tin được cung cấp từ KH
@@ -526,38 +525,107 @@ class ChatwootLegacyMap(Base):
     )
 
 
+class CallLogStatus(str, enum.Enum):
+    """Trạng thái chuẩn hóa của cuộc gọi (summary)."""
+    CREATED = "created"
+    RINGING = "ringing"
+    ANSWERED = "answered"
+    ENDED = "ended"
+    MISSED = "missed"
+    BUSY = "busy"
+    NO_ANSWER = "no_answer"
+    FAILED = "failed"
+
+
 class CallLog(Base):
+    """
+    Snapshot 1 cuộc gọi. Khóa map tổng đài: sip_call_id (UUID, unique global).
+    """
     __tablename__ = "call_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
-    
-    # Định danh cuộc gọi từ tổng đài
-    sip_call_id = Column(String(255), unique=True, nullable=False, index=True) 
 
-    # Khớp nối thông tin ngữ cảnh (Context)
+    # Định danh cuộc gọi từ tổng đài (khóa map chính)
+    sip_call_id = Column(UUID(as_uuid=True), unique=True, nullable=False, index=True)
+    # call_id phía PBX (phụ, đối soát)
+    provider_call_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id", ondelete="SET NULL"), nullable=True, index=True)
     ticket_id = Column(UUID(as_uuid=True), ForeignKey("tickets.id", ondelete="SET NULL"), nullable=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True) # Agent thực hiện cuộc gọi
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
 
-    # Thông tin cuộc gọi
-    direction = Column(String(20), default="outbound", nullable=False) # inbound hoặc outbound
-    phone_number = Column(String(20), nullable=False) # Số điện thoại của khách hàng
-    status = Column(String(50), nullable=True) # ringing, answered, ended, busy, missed...
-    
-    # Thời gian & File ghi âm
-    started_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
+    direction = Column(String(20), default="outbound", nullable=False)  # inbound | outbound | internal
+    phone_number = Column(String(20), nullable=False)  # số KH chuẩn hóa
+    from_number = Column(String(30), nullable=True, index=True)
+    to_number = Column(String(30), nullable=True, index=True)
+    hotline = Column(String(30), nullable=True, index=True)
+    status = Column(String(50), nullable=True, default=CallLogStatus.CREATED.value, index=True)
+    source = Column(String(20), nullable=False, default="web")  # web | webhook | api
+
+    started_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    answered_at = Column(TIMESTAMP(timezone=True), nullable=True)
     ended_at = Column(TIMESTAMP(timezone=True), nullable=True)
-    duration = Column(Integer, default=0) # Thời lượng cuộc gọi (giây)
-    recording_url = Column(String(512), nullable=True) # Đường dẫn file ghi âm cuộc gọi
-    
-    # Metadata mở rộng
-    meta_data = Column(JSONB, nullable=True)
-    
-    created_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
+    duration = Column(Integer, default=0)
+    billsec = Column(Integer, default=0)
+    recording_url = Column(String(512), nullable=True)
 
-    # Relationships
+    meta_data = Column(JSONB, nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
     tenant = relationship("Tenant", backref="call_logs")
     customer = relationship("Customer", backref="call_logs")
     ticket = relationship("Ticket", backref="call_logs")
     user = relationship("User", backref="call_logs")
+    events = relationship(
+        "CallLogEvent",
+        back_populates="call_log",
+        cascade="all, delete-orphan",
+        order_by="CallLogEvent.received_at",
+    )
+
+    __table_args__ = (
+        Index("ix_call_logs_tenant_started", "tenant_id", "started_at"),
+        Index("ix_call_logs_tenant_direction_status_started", "tenant_id", "direction", "status", "started_at"),
+    )
+
+
+class CallLogEvent(Base):
+    """
+    Append-only: mỗi webhook telephony = 1 dòng (raw payload).
+    """
+    __tablename__ = "call_log_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
+    call_log_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("call_logs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    sip_call_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    provider_call_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    state = Column(String(50), nullable=False, index=True)
+    application = Column(String(50), nullable=True)
+    event_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    received_at = Column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+        index=True,
+    )
+    payload = Column(JSONB, nullable=False)
+    idempotency_key = Column(String(128), nullable=True, unique=True)
+
+    call_log = relationship("CallLog", back_populates="events")
+
+    __table_args__ = (
+        Index("ix_call_log_events_sip_received", "sip_call_id", "received_at"),
+        Index("ix_call_log_events_tenant_state_received", "tenant_id", "state", "received_at"),
+    )

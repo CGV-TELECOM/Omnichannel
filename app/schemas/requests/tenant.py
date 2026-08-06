@@ -30,7 +30,27 @@ class GroupBase(BaseModel):
     graph_id: Optional[UUID] = None
     agent_id: Optional[UUID] = None
     graph_activated: Optional[int] = 0
-    webcall_config: Optional[dict[str, Any]] = None
+    webcall_config: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Cấu hình WebCall / SIP theo tenant. "
+            "Mặc định để trống; điền khi cấu hình thực tế."
+        ),
+        json_schema_extra={
+            "example": {
+                "enable_widget": True,
+                "sip_only": True,
+                "sip_domain": "",
+                "domain_uuid": "",
+                "hotlines": [],
+                "ws_server": "",
+                "sip_password": "",
+                "api_key": "",
+                "extension": "",
+                "webhook_secret": "",
+            }
+        },
+    )
 
 class TenantCreate(GroupBase):
     pass
