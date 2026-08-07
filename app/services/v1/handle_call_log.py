@@ -1,16 +1,17 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
-from app.db.models import CallLog, User, Tenant, Customer, Ticket
+from app.db.models import CallLog, CallLogEvent, User, Tenant, Customer, Ticket
 from sqlalchemy import select, func, and_, or_, String
 from sqlalchemy.exc import SQLAlchemyError
 from app.schemas.requests.call_log import (
     CallLogCreate,
     CallLogUpdate,
-    CallLogResponse
+    CallLogResponse,
+    CallLogEventResponse,
 )
 from app.utils.helpers import isCheckMaxLevel
 from uuid import UUID
-from typing import Optional
+from typing import Optional, Any, Tuple
 from datetime import datetime, timezone
 from sqlalchemy.orm import joinedload, selectinload
 import logging
@@ -322,4 +323,135 @@ async def get_call_logs(
             status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
             message=f"Lỗi không xác định: {str(e)}",
             data=None
+        )
+
+
+async def _get_tenant_scoped_call_log(
+    db: AsyncSession,
+    current_user: User,
+    sip_call_id: UUID,
+) -> Tuple[Optional[CallLog], Optional[Any]]:
+    """Trả (call_log, error_response). error_response != None nếu không được phép / không tìm thấy."""
+    query = await db.execute(select(CallLog).where(CallLog.sip_call_id == sip_call_id))
+    call_log = query.scalar_one_or_none()
+    if not call_log:
+        return None, api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.NOT_FOUND,
+            message=f"Không tìm thấy cuộc gọi với sip_call_id: {sip_call_id}",
+            data=None,
+        )
+
+    is_super_admin = await isCheckMaxLevel(current_user, db)
+    if not is_super_admin and call_log.tenant_id != current_user.tenant_id:
+        return None, api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.FORBIDDEN,
+            message="Bạn không có quyền truy cập cuộc gọi của doanh nghiệp khác",
+            data=None,
+        )
+    return call_log, None
+
+
+async def get_call_log_events(
+    sip_call_id: UUID,
+    db: AsyncSession,
+    current_user: User,
+    page: int = 1,
+    page_size: int = 50,
+    state: Optional[str] = None,
+):
+    """Timeline event của 1 cuộc gọi (append-only raw webhook)."""
+    try:
+        call_log, err = await _get_tenant_scoped_call_log(db, current_user, sip_call_id)
+        if err:
+            return err
+
+        filters = [CallLogEvent.call_log_id == call_log.id]
+        if state:
+            filters.append(CallLogEvent.state == state.lower().strip())
+
+        count_q = await db.execute(
+            select(func.count()).select_from(CallLogEvent).where(and_(*filters))
+        )
+        total = count_q.scalar() or 0
+        total_pages = (total + page_size - 1) // page_size if page_size else 0
+        offset = (page - 1) * page_size
+
+        result = await db.execute(
+            select(CallLogEvent)
+            .where(and_(*filters))
+            .order_by(CallLogEvent.received_at.asc())
+            .offset(offset)
+            .limit(page_size)
+        )
+        events = result.scalars().all()
+
+        return api_response(
+            status=ResponseStatus.SUCCESS,
+            status_code=ResponseStatusCode.OK,
+            message="Lấy danh sách call events thành công",
+            data={
+                "sip_call_id": str(call_log.sip_call_id),
+                "call_log_id": str(call_log.id),
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "items": [
+                    CallLogEventResponse.model_validate(e).model_dump(mode="json")
+                    for e in events
+                ],
+            },
+        )
+    except Exception as e:
+        logger.error(f"[ERROR] get_call_log_events: {e}")
+        return api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            message=f"Lỗi không xác định: {str(e)}",
+            data=None,
+        )
+
+
+async def get_call_log_event_by_id(
+    sip_call_id: UUID,
+    event_id: UUID,
+    db: AsyncSession,
+    current_user: User,
+):
+    """Chi tiết 1 event theo id (trong phạm vi cuộc gọi)."""
+    try:
+        call_log, err = await _get_tenant_scoped_call_log(db, current_user, sip_call_id)
+        if err:
+            return err
+
+        result = await db.execute(
+            select(CallLogEvent).where(
+                CallLogEvent.id == event_id,
+                CallLogEvent.call_log_id == call_log.id,
+            )
+        )
+        event = result.scalar_one_or_none()
+        if not event:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.NOT_FOUND,
+                message="Không tìm thấy call event",
+                data=None,
+            )
+
+        return api_response(
+            status=ResponseStatus.SUCCESS,
+            status_code=ResponseStatusCode.OK,
+            message="Lấy call event thành công",
+            data=CallLogEventResponse.model_validate(event).model_dump(mode="json"),
+        )
+    except Exception as e:
+        logger.error(f"[ERROR] get_call_log_event_by_id: {e}")
+        return api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            message=f"Lỗi không xác định: {str(e)}",
+            data=None,
         )

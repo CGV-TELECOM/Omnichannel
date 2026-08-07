@@ -42,6 +42,48 @@ async def update_call(
     """
     return await handle_call_log.update_call_log(sip_call_id=sip_call_id, db=db, current_user=current_user, data=call_log_data)
 
+@router.get("/{sip_call_id}/events")
+async def list_call_events(
+    sip_call_id: UUID,
+    request: Request,
+    page: int = Query(1, ge=1, description="Số trang"),
+    page_size: int = Query(50, ge=1, le=200, description="Số event mỗi trang"),
+    state: Optional[str] = Query(None, description="Lọc theo state (ringing|answered|hangup|cdr|...)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """
+    Timeline call events (raw webhook) của 1 cuộc gọi theo sip_call_id.
+    """
+    return await handle_call_log.get_call_log_events(
+        sip_call_id=sip_call_id,
+        db=db,
+        current_user=current_user,
+        page=page,
+        page_size=page_size,
+        state=state,
+    )
+
+
+@router.get("/{sip_call_id}/events/{event_id}")
+async def get_call_event(
+    sip_call_id: UUID,
+    event_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """
+    Chi tiết 1 call event theo id (thuộc cuộc gọi sip_call_id).
+    """
+    return await handle_call_log.get_call_log_event_by_id(
+        sip_call_id=sip_call_id,
+        event_id=event_id,
+        db=db,
+        current_user=current_user,
+    )
+
+
 @router.get("/{sip_call_id}")
 async def get_call_by_id(
     sip_call_id: UUID,

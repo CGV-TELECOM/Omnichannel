@@ -82,3 +82,20 @@ class CallLogResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CallLogEventResponse(BaseModel):
+    id: UUID
+    call_log_id: UUID
+    tenant_id: UUID
+    sip_call_id: UUID
+    provider_call_id: Optional[UUID] = None
+    state: str
+    application: Optional[str] = None
+    event_at: Optional[datetime] = None
+    received_at: datetime
+    payload: Dict[str, Any]
+    idempotency_key: Optional[str] = None
+
+    class Config:
+        from_attributes = True
