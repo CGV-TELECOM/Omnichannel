@@ -166,6 +166,11 @@ async def seed_rbac(db: AsyncSession):
         "create_messaging_user",
         "edit_messaging_user",
         "delete_messaging_user",
+        # Call log / telephony timeline
+        "view_call_logs",
+        "create_call_log",
+        "edit_call_log",
+        "view_call_log_events",
     ]
     permissions = []
     for name in permission_names:
@@ -301,6 +306,11 @@ async def seed_rbac(db: AsyncSession):
         "view_messaging_users",
         "create_messaging_user",
         "edit_messaging_user",
+        # Call log — agent: xem/tạo/sửa + xem timeline events (không delete)
+        "view_call_logs",
+        "create_call_log",
+        "edit_call_log",
+        "view_call_log_events",
     ]
     user_permissions_objects = [p for p in permissions if p.name in user_permissions]
     all_user_roles = (await db.execute(select(Role).where(Role.name == "user"))).scalars().all()

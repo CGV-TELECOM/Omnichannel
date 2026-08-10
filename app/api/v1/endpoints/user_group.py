@@ -5,6 +5,8 @@ from app.services.v1 import handle_user_group
 from app.core.security.permissions import has_permission
 from app.schemas.requests.user_group import UserGroupCreate, UserGroupDelete, UserGroupCreateList
 from app.core.config.logging import log_user_action
+from app.core.dependencies.dependencies import get_current_user_dependency
+from app.db.models import User
 
 router = APIRouter(
     prefix="/user_group",
@@ -18,9 +20,12 @@ async def assign_users_to_groups_endpoint(
     request: Request,
     user_group_data: UserGroupCreateList,
     db: AsyncSession = Depends(get_db),
-    _ = Depends(has_permission("assign_user_to_group"))
+    current_user: User = Depends(get_current_user_dependency),
+    _ = Depends(has_permission("assign_user_to_group")),
 ):
-    return await handle_user_group.assign_users_to_groups(user_group_data, db)
+    return await handle_user_group.assign_users_to_groups(
+        user_group_data, db, current_user=current_user
+    )
 
 
 @router.delete("/remove-user-from-group")
@@ -29,6 +34,9 @@ async def remove_user_from_group(
     request: Request,
     user_group_data: UserGroupDelete,
     db: AsyncSession = Depends(get_db),
-    _ = Depends(has_permission("delete_group"))
+    current_user: User = Depends(get_current_user_dependency),
+    _ = Depends(has_permission("delete_group")),
 ):
-    return await handle_user_group.delete_user_group(user_group_data, db)
+    return await handle_user_group.delete_user_group(
+        user_group_data, db, current_user=current_user
+    )

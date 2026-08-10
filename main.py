@@ -53,7 +53,6 @@ app = FastAPI()
 # app.add_middleware(RateLimitMiddleware)
 
 app.include_router(router_auth, prefix="/api/v1", tags=["Auth"])
-app.include_router(router_test_email, prefix="/api/v1", tags=["Test"])
 app.include_router(router_chatwoot_webhook, prefix="/api/v1")
 app.include_router(router_telephony_webhook, prefix="/api/v1")
 protected_routers = [
@@ -81,6 +80,7 @@ protected_routers = [
     router_notification,
     router_chatwoot,
     router_call_log,
+    router_test_email,
 ]
 
 origins = [

@@ -1,7 +1,11 @@
 from datetime import timedelta, datetime, timezone
 from jose import jwt, JWTError
-from fastapi import Request, HTTPException, status
+from fastapi import Request, HTTPException, status, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
 from app.core.config.app_config import settings
+from app.core.config.database import get_db
+from app.db.models import User
 from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
 from uuid import UUID
 
@@ -57,68 +61,27 @@ def create_refresh_token(data: dict):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-def verify_token(request: Request):
-    """
-    Xác thực JWT token từ Authorization header
-    Args:
-        request (Request): FastAPI request object
-    Returns:
-        str: user_id từ token nếu xác thực thành công
-    Raises:
-        HTTPException: Với các trường hợp lỗi khác nhau
-    """
+
+def _parse_bearer_access_payload(request: Request) -> dict:
+    """Decode access JWT từ Authorization header (chưa check token_version)."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     try:
-        auth_header = request.headers.get("Authorization")
-        if not auth_header:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Missing Authorization header",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-            # return api_response(
-            #     status=ResponseStatus.ERROR,
-            #     status_code=ResponseStatusCode.UNAUTHORIZED,
-            #     message="Missing Authorization header",
-            #     data=None
-            # )
-
-        parts = auth_header.split()
-        if len(parts) != 2 or parts[0].lower() != "bearer":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        token = parts[1]
-
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        
-        # Kiểm tra loại token
-        token_type = payload.get("token_type")
-        if token_type != "access":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token type. Access token required",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        user_id = payload.get("user_id")
-        if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token payload",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-            
-        # tenant = payload.get('tenant')
-        # if tenant is None:
-        #     raise HTTPException(
-        #         status_code=status.HTTP_401_UNAUTHORIZED,
-        #         detail="Invalid token payload",
-        #         headers={"WWW-Authenticate": "Bearer"},
-        #     )
-
-        return UUID(user_id) if isinstance(user_id, str) else user_id
+        payload = jwt.decode(parts[1], SECRET_KEY, algorithms=[ALGORITHM])
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -131,6 +94,68 @@ def verify_token(request: Request):
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    if payload.get("token_type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type. Access token required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if payload.get("user_id") is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return payload
+
+
+async def _assert_token_version_valid(
+    db: AsyncSession,
+    user_id: UUID,
+    token_version_from_token,
+) -> User:
+    """So khớp token_version JWT với DB; user inactive → 401."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if user.is_active != 1:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User inactive",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    db_version = user.token_version if user.token_version is not None else 0
+    if token_version_from_token is None or int(token_version_from_token) != int(db_version):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token đã bị vô hiệu hóa",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+async def verify_token(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Gate JWT cho protected routers: decode access token + enforce token_version.
+    Returns:
+        UUID: user_id
+    """
+    payload = _parse_bearer_access_payload(request)
+    raw_id = payload.get("user_id")
+    user_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
+    await _assert_token_version_valid(db, user_id, payload.get("token_version"))
+    return user_id
 
 def verify_refresh_token(request: Request) -> UUID:
     """

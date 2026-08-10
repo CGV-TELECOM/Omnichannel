@@ -79,6 +79,9 @@ class CallLogResponse(BaseModel):
     meta_data: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # Enrich (optional) — list/detail dùng chung shape
+    tenant_name: Optional[str] = None
+    username_action_call: Optional[str] = None
 
     class Config:
         from_attributes = True

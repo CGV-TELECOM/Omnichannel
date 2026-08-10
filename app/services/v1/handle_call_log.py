@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
-from app.db.models import CallLog, CallLogEvent, User, Tenant, Customer, Ticket
+from app.db.models import CallLog, CallLogEvent, User, Customer, Ticket
 from sqlalchemy import select, func, and_, or_, String
 from sqlalchemy.exc import SQLAlchemyError
 from app.schemas.requests.call_log import (
@@ -13,16 +13,112 @@ from app.utils.helpers import isCheckMaxLevel
 from uuid import UUID
 from typing import Optional, Any, Tuple
 from datetime import datetime, timezone
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import selectinload
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+async def _validate_call_log_refs(
+    db: AsyncSession,
+    tenant_id: UUID,
+    *,
+    customer_id: Optional[UUID] = None,
+    ticket_id: Optional[UUID] = None,
+    user_id: Optional[UUID] = None,
+) -> Optional[Any]:
+    """
+    Đảm bảo customer/ticket/user (nếu có) tồn tại và thuộc cùng tenant với call log.
+    User phải bật call_log_enabled.
+    Trả về api_response lỗi, hoặc None nếu hợp lệ.
+    """
+    if customer_id is not None:
+        customer = await db.scalar(
+            select(Customer.id).where(
+                Customer.id == customer_id,
+                Customer.tenant_id == tenant_id,
+            )
+        )
+        if not customer:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.BAD_REQUEST,
+                message="customer_id không tồn tại hoặc không thuộc tenant của cuộc gọi",
+                data=None,
+            )
+
+    if ticket_id is not None:
+        ticket = await db.scalar(
+            select(Ticket.id).where(
+                Ticket.id == ticket_id,
+                Ticket.tenant_id == tenant_id,
+            )
+        )
+        if not ticket:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.BAD_REQUEST,
+                message="ticket_id không tồn tại hoặc không thuộc tenant của cuộc gọi",
+                data=None,
+            )
+
+    if user_id is not None:
+        user = await db.scalar(
+            select(User).where(
+                User.id == user_id,
+                User.tenant_id == tenant_id,
+            )
+        )
+        if not user:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.BAD_REQUEST,
+                message="user_id không tồn tại hoặc không thuộc tenant của cuộc gọi",
+                data=None,
+            )
+        if user.call_log_enabled is False:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.BAD_REQUEST,
+                message="user_id đã tắt ghi log cuộc gọi (call_log_enabled=false)",
+                data=None,
+            )
+
+    return None
+
+
+def _serialize_call_log(log: CallLog) -> dict:
+    """Serialize CallLog → dict thống nhất cho create/get/list."""
+    data = CallLogResponse.model_validate(log).model_dump(mode="json")
+    tenant = getattr(log, "tenant", None)
+    user = getattr(log, "user", None)
+    data["tenant_name"] = tenant.name if tenant is not None else None
+    data["username_action_call"] = user.username if user is not None else None
+    return data
+
+
+async def _load_call_log_with_rels(db: AsyncSession, call_log_id: UUID) -> Optional[CallLog]:
+    result = await db.execute(
+        select(CallLog)
+        .options(selectinload(CallLog.tenant), selectinload(CallLog.user))
+        .where(CallLog.id == call_log_id)
+    )
+    return result.scalar_one_or_none()
+
 
 async def create_call_log(db: AsyncSession, current_user: User, data: CallLogCreate):
     """
     Tạo bản ghi cuộc gọi mới (CallLog)
     """
     try:
+        if current_user.call_log_enabled is False:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Tài khoản của bạn đã tắt ghi log cuộc gọi",
+                data=None,
+            )
+
         # Xác định tenant_id
         is_super_admin = await isCheckMaxLevel(current_user, db)
         tenant_id = data.tenant_id if (is_super_admin and data.tenant_id) else current_user.tenant_id
@@ -47,6 +143,24 @@ async def create_call_log(db: AsyncSession, current_user: User, data: CallLogCre
                 data=None
             )
 
+        if data.user_id:
+            resolved_user_id = data.user_id
+        elif current_user.tenant_id == tenant_id:
+            resolved_user_id = current_user.id
+        else:
+            # Super admin tạo hộ tenant khác mà không chỉ định agent
+            resolved_user_id = None
+
+        fk_err = await _validate_call_log_refs(
+            db,
+            tenant_id,
+            customer_id=data.customer_id,
+            ticket_id=data.ticket_id,
+            user_id=resolved_user_id,
+        )
+        if fk_err:
+            return fk_err
+
         # Tạo bản ghi mới
         new_call = CallLog(
             tenant_id=tenant_id,
@@ -54,7 +168,7 @@ async def create_call_log(db: AsyncSession, current_user: User, data: CallLogCre
             provider_call_id=data.provider_call_id,
             customer_id=data.customer_id,
             ticket_id=data.ticket_id,
-            user_id=data.user_id or current_user.id,
+            user_id=resolved_user_id,
             direction=data.direction,
             phone_number=data.phone_number,
             from_number=data.from_number,
@@ -75,13 +189,13 @@ async def create_call_log(db: AsyncSession, current_user: User, data: CallLogCre
 
         db.add(new_call)
         await db.commit()
-        await db.refresh(new_call)
+        loaded = await _load_call_log_with_rels(db, new_call.id)
 
         return api_response(
             status=ResponseStatus.SUCCESS,
             status_code=ResponseStatusCode.CREATED,
             message="Tạo bản ghi cuộc gọi thành công",
-            data=CallLogResponse.model_validate(new_call)
+            data=_serialize_call_log(loaded or new_call),
         )
 
     except SQLAlchemyError as e:
@@ -132,6 +246,17 @@ async def update_call_log(sip_call_id: UUID, db: AsyncSession, current_user: Use
 
         # Cập nhật thông tin
         update_data = data.model_dump(exclude_unset=True)
+        if any(k in update_data for k in ("customer_id", "ticket_id", "user_id")):
+            fk_err = await _validate_call_log_refs(
+                db,
+                call_log.tenant_id,
+                customer_id=update_data["customer_id"] if update_data.get("customer_id") else None,
+                ticket_id=update_data["ticket_id"] if update_data.get("ticket_id") else None,
+                user_id=update_data["user_id"] if update_data.get("user_id") else None,
+            )
+            if fk_err:
+                return fk_err
+
         for key, value in update_data.items():
             setattr(call_log, key, value)
 
@@ -142,13 +267,13 @@ async def update_call_log(sip_call_id: UUID, db: AsyncSession, current_user: Use
                 call_log.duration = max(0, int(diff.total_seconds()))
 
         await db.commit()
-        await db.refresh(call_log)
+        loaded = await _load_call_log_with_rels(db, call_log.id)
 
         return api_response(
             status=ResponseStatus.SUCCESS,
             status_code=ResponseStatusCode.OK,
             message="Cập nhật cuộc gọi thành công",
-            data=CallLogResponse.model_validate(call_log)
+            data=_serialize_call_log(loaded or call_log),
         )
 
     except SQLAlchemyError as e:
@@ -175,7 +300,9 @@ async def get_call_log_by_sip_call_id(sip_call_id: UUID, db: AsyncSession, curre
     """
     try:
         query = await db.execute(
-            select(CallLog).where(CallLog.sip_call_id == sip_call_id)
+            select(CallLog)
+            .options(selectinload(CallLog.tenant), selectinload(CallLog.user))
+            .where(CallLog.sip_call_id == sip_call_id)
         )
         call_log = query.scalar_one_or_none()
         if not call_log:
@@ -200,7 +327,7 @@ async def get_call_log_by_sip_call_id(sip_call_id: UUID, db: AsyncSession, curre
             status=ResponseStatus.SUCCESS,
             status_code=ResponseStatusCode.OK,
             message="Lấy thông tin cuộc gọi thành công",
-            data=CallLogResponse.model_validate(call_log)
+            data=_serialize_call_log(call_log),
         )
 
     except Exception as e:
@@ -274,34 +401,7 @@ async def get_call_logs(
         result = await db.execute(query)
         call_logs = result.scalars().all()
 
-        items = []
-        for log in call_logs:
-            items.append({
-                "id": str(log.id),
-                "sip_call_id": str(log.sip_call_id),
-                "provider_call_id": str(log.provider_call_id) if log.provider_call_id else None,
-                "tenant_id": str(log.tenant_id),
-                "tenant_name": log.tenant.name if log.tenant else None,
-                "username_action_call": log.user.username if log.user else None,
-                "customer_id": str(log.customer_id) if log.customer_id else None,
-                "ticket_id": str(log.ticket_id) if log.ticket_id else None,
-                "user_id": str(log.user_id) if log.user_id else None,
-                "duration": log.duration,
-                "billsec": log.billsec,
-                "started_at": log.started_at.isoformat() if log.started_at else None,
-                "answered_at": log.answered_at.isoformat() if log.answered_at else None,
-                "ended_at": log.ended_at.isoformat() if log.ended_at else None,
-                "meta_data": log.meta_data,
-                "phone_number": log.phone_number,
-                "from_number": log.from_number,
-                "to_number": log.to_number,
-                "hotline": log.hotline,
-                "status": log.status,
-                "direction": log.direction,
-                "source": log.source,
-                "recording_url": log.recording_url,
-                "created_at": log.created_at.isoformat() if log.created_at else None,
-            })
+        items = [_serialize_call_log(log) for log in call_logs]
 
         return api_response(
             status=ResponseStatus.SUCCESS,

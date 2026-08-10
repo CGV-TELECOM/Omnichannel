@@ -113,6 +113,7 @@ def log_user_action(action_name: str):
                             data=json.dumps(request_data, ensure_ascii=False),
                             create_time=utc_time,
                             user_id=user.id if user else None,
+                            tenant_id=user.tenant_id if user else None,
                         )
                         db.add(log)
                         await db.commit()

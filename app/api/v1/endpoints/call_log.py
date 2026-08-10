@@ -6,6 +6,8 @@ from app.schemas.requests.call_log import (
     CallLogUpdate,
 )
 from app.db.models import User
+from app.core.security.permissions import has_permission
+from app.core.config.logging import log_user_action
 from app.core.dependencies.dependencies import get_current_user_dependency
 from app.services.v1 import handle_call_log
 from uuid import UUID
@@ -17,11 +19,13 @@ router = APIRouter(
 )
 
 @router.post("")
+@log_user_action("create_call_log")
 async def create_call(
     request: Request,
     call_log_data: CallLogCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user_dependency)
+    current_user: User = Depends(get_current_user_dependency),
+    _ = Depends(has_permission("create_call_log")),
 ):
     """
     Tạo bản ghi cuộc gọi mới (CallLog) — dùng khi agent gọi outbound từ web.
@@ -30,12 +34,14 @@ async def create_call(
     return await handle_call_log.create_call_log(db=db, current_user=current_user, data=call_log_data)
 
 @router.put("/{sip_call_id}")
+@log_user_action("edit_call_log")
 async def update_call(
     sip_call_id: UUID,
     request: Request,
     call_log_data: CallLogUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user_dependency)
+    current_user: User = Depends(get_current_user_dependency),
+    _ = Depends(has_permission("edit_call_log")),
 ):
     """
     Cập nhật trạng thái cuộc gọi theo sip_call_id
@@ -51,6 +57,7 @@ async def list_call_events(
     state: Optional[str] = Query(None, description="Lọc theo state (ringing|answered|hangup|cdr|...)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
+    _ = Depends(has_permission("view_call_log_events")),
 ):
     """
     Timeline call events (raw webhook) của 1 cuộc gọi theo sip_call_id.
@@ -72,6 +79,7 @@ async def get_call_event(
     request: Request,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
+    _ = Depends(has_permission("view_call_log_events")),
 ):
     """
     Chi tiết 1 call event theo id (thuộc cuộc gọi sip_call_id).
@@ -89,7 +97,8 @@ async def get_call_by_id(
     sip_call_id: UUID,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user_dependency)
+    current_user: User = Depends(get_current_user_dependency),
+    _ = Depends(has_permission("view_call_logs")),
 ):
     """
     Lấy thông tin chi tiết cuộc gọi qua sip_call_id (Tra cứu ngược)
@@ -108,7 +117,8 @@ async def list_calls(
     ticket_id: Optional[UUID] = Query(None, description="ID Ticket"),
     customer_id: Optional[UUID] = Query(None, description="ID Khách hàng"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user_dependency)
+    current_user: User = Depends(get_current_user_dependency),
+    _ = Depends(has_permission("view_call_logs")),
 ):
     """
     Lấy danh sách các cuộc gọi có phân trang và lọc

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -233,6 +233,35 @@ def _normalize_phone(raw: Optional[str]) -> str:
     return "".join(ch for ch in str(raw) if ch.isdigit() or ch == "+")
 
 
+def _phone_digits(raw: Optional[str]) -> str:
+    """Chỉ giữ chữ số để so khớp ổn định."""
+    if not raw:
+        return ""
+    return "".join(ch for ch in str(raw) if ch.isdigit())
+
+
+def _phone_match_variants(phone: str) -> set[str]:
+    """
+    Sinh biến thể VN thường gặp để exact-match:
+    0901... ↔ 84901... ↔ +84901...
+    """
+    digits = _phone_digits(phone)
+    if not digits:
+        return set()
+
+    variants = {digits}
+    if digits.startswith("84") and len(digits) >= 11:
+        variants.add("0" + digits[2:])
+        variants.add(f"+{digits}")
+    elif digits.startswith("0") and len(digits) >= 10:
+        intl = "84" + digits[1:]
+        variants.add(intl)
+        variants.add(f"+{intl}")
+    else:
+        variants.add(f"+{digits}")
+    return variants
+
+
 def _map_status(state: str, direction: str, payload: dict) -> str:
     s = (state or "").lower().strip()
     direction = (direction or "outbound").lower()
@@ -340,24 +369,72 @@ async def _find_user_by_extension(db: AsyncSession, tenant_id: UUID, extension: 
             User.tenant_id == tenant_id,
             User.sip_extension == ext,
             User.is_active == 1,
+            # None / True = bật; chỉ bỏ qua khi tắt tường minh
+            User.call_log_enabled.is_not(False),
         )
     )
     return result.scalar_one_or_none()
 
 
 async def _find_customer_by_phone(db: AsyncSession, tenant_id: UUID, phone: str) -> Optional[UUID]:
-    if not phone:
+    """
+    Match khách theo SĐT an toàn:
+    1) Exact match trên các biến thể chuẩn hóa (0x / 84x / +84x)
+    2) Fallback đuôi 9 số — CHỈ khi đúng 1 khách trong tenant
+    Ambiguous → None (không đoán).
+
+    Chi tiết: docs/call_customer_phone_match.md
+    """
+    digits = _phone_digits(phone)
+    if not digits:
         return None
-    # match exact hoặc đuôi số
-    result = await db.execute(
+
+    variants = _phone_match_variants(digits)
+    if variants:
+        exact = await db.execute(
+            select(Customer.id).where(
+                Customer.tenant_id == tenant_id,
+                Customer.is_active == 1,
+                Customer.phone.in_(list(variants)),
+            )
+        )
+        exact_ids = list(exact.scalars().all())
+        if len(exact_ids) == 1:
+            return exact_ids[0]
+        if len(exact_ids) > 1:
+            logger.warning(
+                "[telephony] ambiguous exact phone match tenant=%s phone=%s count=%s",
+                tenant_id,
+                digits,
+                len(exact_ids),
+            )
+            return None
+
+    # Suffix fallback: chỉ khi đủ dài và unique
+    suffix = digits[-9:] if len(digits) >= 9 else ""
+    if len(suffix) < 9:
+        return None
+
+    phone_digits_expr = func.regexp_replace(Customer.phone, "[^0-9]", "", "g")
+    suffix_q = await db.execute(
         select(Customer.id).where(
             Customer.tenant_id == tenant_id,
             Customer.is_active == 1,
             Customer.phone.isnot(None),
-            Customer.phone.ilike(f"%{phone[-9:]}" if len(phone) >= 9 else phone),
-        ).limit(1)
+            func.right(phone_digits_expr, 9) == suffix,
+        )
     )
-    return result.scalar_one_or_none()
+    suffix_ids = list(suffix_q.scalars().all())
+    if len(suffix_ids) == 1:
+        return suffix_ids[0]
+    if len(suffix_ids) > 1:
+        logger.warning(
+            "[telephony] ambiguous suffix phone match tenant=%s suffix=%s count=%s",
+            tenant_id,
+            suffix,
+            len(suffix_ids),
+        )
+    return None
 
 
 async def handle_telephony_webhook(db: AsyncSession, payload: dict):

@@ -4,32 +4,92 @@ from app.schemas.responses.api_response_rule import api_response, ResponseStatus
 from app.db.models import User, Group, GroupUser
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
+from app.utils.helpers import isCheckMaxLevel
 
-async def assign_users_to_groups(user_group_data: UserGroupCreateList, db: AsyncSession):
+
+async def _resolve_scoped_user_group(
+    db: AsyncSession,
+    current_user: User,
+    user_id,
+    group_id,
+):
+    """
+    Trả (user, group, error_response).
+    - User thường: user & group phải thuộc tenant của mình.
+    - Super admin: user & group phải cùng một tenant với nhau.
+    """
+    is_super_admin = await isCheckMaxLevel(current_user, db)
+
+    user = await db.scalar(select(User).where(User.id == user_id))
+    if not user:
+        return None, None, api_response(
+            status=ResponseStatus.ERROR,
+            message="Người dùng không tồn tại",
+            data=None,
+            status_code=ResponseStatusCode.NOT_FOUND,
+        )
+
+    group = await db.scalar(select(Group).where(Group.id == group_id))
+    if not group:
+        return None, None, api_response(
+            status=ResponseStatus.ERROR,
+            message="Nhóm không tồn tại",
+            data=None,
+            status_code=ResponseStatusCode.NOT_FOUND,
+        )
+
+    if not is_super_admin:
+        if user.tenant_id != current_user.tenant_id or group.tenant_id != current_user.tenant_id:
+            return None, None, api_response(
+                status=ResponseStatus.ERROR,
+                message="Không được gán user/group thuộc tenant khác",
+                data=None,
+                status_code=ResponseStatusCode.FORBIDDEN,
+            )
+    elif user.tenant_id != group.tenant_id:
+        return None, None, api_response(
+            status=ResponseStatus.ERROR,
+            message="User và group phải thuộc cùng một tenant",
+            data=None,
+            status_code=ResponseStatusCode.BAD_REQUEST,
+        )
+
+    return user, group, None
+
+
+async def assign_users_to_groups(
+    user_group_data: UserGroupCreateList,
+    db: AsyncSession,
+    current_user: User,
+):
     try:
         for item in user_group_data.items:
-            # Check user exists
-            result = await db.execute(select(User).filter_by(id=item.user_id))
-            user = result.scalar_one_or_none()
-            if not user:
-                raise ValueError(f"Người dùng không tồn tại")
+            user, group, err = await _resolve_scoped_user_group(
+                db, current_user, item.user_id, item.group_id
+            )
+            if err:
+                await db.rollback()
+                return err
 
-            # Check group exists
-            result = await db.execute(select(Group).filter_by(id=item.group_id))
-            group = result.scalar_one_or_none()
-            if not group:
-                raise ValueError(f"Nhóm không tồn tại")
-
-            # Check if already assigned
             result = await db.execute(
                 select(GroupUser).filter_by(user_id=item.user_id, group_id=item.group_id)
             )
             if result.scalar_one_or_none():
-                raise ValueError(f"Người dùng đã được gán vào nhóm")
+                await db.rollback()
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    message="Người dùng đã được gán vào nhóm",
+                    data=None,
+                    status_code=ResponseStatusCode.CONFLICT,
+                )
 
-            # Add new relation
-            user_group = GroupUser(user_id=item.user_id, group_id=item.group_id)
-            db.add(user_group)
+            db.add(
+                GroupUser(
+                    user_id=item.user_id,
+                    group_id=item.group_id,
+                    tenant_id=group.tenant_id or user.tenant_id,
+                )
+            )
 
         await db.commit()
 
@@ -37,17 +97,9 @@ async def assign_users_to_groups(user_group_data: UserGroupCreateList, db: Async
             status=ResponseStatus.SUCCESS,
             message="Thêm người dùng vào nhóm thành công",
             data=None,
-            status_code=ResponseStatusCode.OK
+            status_code=ResponseStatusCode.OK,
         )
 
-    except ValueError as ve:
-        await db.rollback()
-        return api_response(
-            status=ResponseStatus.ERROR,
-            message=str(ve),
-            data=None,
-            status_code=ResponseStatusCode.CONFLICT
-        )
     except SQLAlchemyError as e:
         await db.rollback()
         print(f"DB error: {e}")
@@ -55,7 +107,7 @@ async def assign_users_to_groups(user_group_data: UserGroupCreateList, db: Async
             status=ResponseStatus.ERROR,
             message="Lỗi cơ sở dữ liệu",
             data=None,
-            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
         )
     except Exception as e:
         await db.rollback()
@@ -64,28 +116,27 @@ async def assign_users_to_groups(user_group_data: UserGroupCreateList, db: Async
             status=ResponseStatus.ERROR,
             message="Lỗi không xác định",
             data=None,
-            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
         )
 
-async def delete_user_group(user_group_data: UserGroupDelete, db: AsyncSession):
-    try:
-        # check user_id and group_id is exist
-        user_result = await db.execute(select(User).filter_by(id=user_group_data.user_id))
-        group_result = await db.execute(select(Group).filter_by(id=user_group_data.group_id))
-        user = user_result.scalar_one_or_none()
-        group = group_result.scalar_one_or_none()
 
-        if not user or not group:
-            return api_response(
-                status=ResponseStatus.ERROR,
-                message="Người dùng hoặc nhóm không tồn tại",
-                data=None,
-                status_code=ResponseStatusCode.NOT_FOUND
-            )
-        
-        # check user_id and group_id is already assigned
+async def delete_user_group(
+    user_group_data: UserGroupDelete,
+    db: AsyncSession,
+    current_user: User,
+):
+    try:
+        user, group, err = await _resolve_scoped_user_group(
+            db, current_user, user_group_data.user_id, user_group_data.group_id
+        )
+        if err:
+            return err
+
         user_group_query = await db.execute(
-            select(GroupUser).filter_by(user_id=user_group_data.user_id, group_id=user_group_data.group_id)
+            select(GroupUser).filter_by(
+                user_id=user_group_data.user_id,
+                group_id=user_group_data.group_id,
+            )
         )
         user_group = user_group_query.scalar_one_or_none()
 
@@ -94,10 +145,9 @@ async def delete_user_group(user_group_data: UserGroupDelete, db: AsyncSession):
                 status=ResponseStatus.ERROR,
                 message="Người dùng không được gán vào nhóm",
                 data=None,
-                status_code=ResponseStatusCode.NOT_FOUND
+                status_code=ResponseStatusCode.NOT_FOUND,
             )
 
-        # delete user from group
         await db.delete(user_group)
         await db.commit()
 
@@ -105,7 +155,7 @@ async def delete_user_group(user_group_data: UserGroupDelete, db: AsyncSession):
             status=ResponseStatus.SUCCESS,
             message="Người dùng đã được xóa khỏi nhóm",
             data=None,
-            status_code=ResponseStatusCode.OK
+            status_code=ResponseStatusCode.OK,
         )
 
     except Exception as e:
@@ -114,5 +164,5 @@ async def delete_user_group(user_group_data: UserGroupDelete, db: AsyncSession):
         return api_response(
             status=ResponseStatus.ERROR,
             message="Có lỗi xảy ra khi xóa người dùng khỏi nhóm",
-            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
         )

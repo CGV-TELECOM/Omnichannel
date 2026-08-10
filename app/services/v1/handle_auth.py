@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
+from fastapi import HTTPException
 from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
 from app.db.models import User, RefreshToken, Log, Tenant, Role
 from sqlalchemy import  delete, and_
@@ -147,18 +148,29 @@ async def login(form_data, request, db: AsyncSession):
     
 async def logout(request, db: AsyncSession):
     try:
-        user_id = verify_token(request)
-        query = delete(RefreshToken).where(
-        RefreshToken.user_id == user_id
-        )
+        user_id = await verify_token(request, db)
+
+        # Tăng token_version → vô hiệu hóa mọi access token cũ ngay lập tức
+        user = await db.get(User, user_id)
+        if user:
+            user.token_version = (user.token_version or 0) + 1
+
+        query = delete(RefreshToken).where(RefreshToken.user_id == user_id)
         await db.execute(query)
         await db.commit()
-    
+
         return api_response(
             status=ResponseStatus.SUCCESS,
             message="Đăng xuất thành công",
             data=None,
-            status_code=ResponseStatusCode.OK
+            status_code=ResponseStatusCode.OK,
+        )
+    except HTTPException as e:
+        return api_response(
+            status=ResponseStatus.ERROR,
+            message=e.detail if isinstance(e.detail, str) else "Unauthorized",
+            data=None,
+            status_code=ResponseStatusCode.UNAUTHORIZED,
         )
     except SQLAlchemyError as e:
         await db.rollback()
@@ -166,14 +178,15 @@ async def logout(request, db: AsyncSession):
             status=ResponseStatus.ERROR,
             message="Lỗi truy vấn cơ sở dữ liệu",
             data=str(e),
-            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
         )
     except Exception as e:
+        await db.rollback()
         return api_response(
             status=ResponseStatus.ERROR,
             message=f"Đã xảy ra lỗi: {str(e)}",
             data=str(e),
-            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
         )
 
 async def get_access_token(request, db: AsyncSession):

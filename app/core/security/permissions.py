@@ -2,12 +2,14 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import SQLAlchemyError
-from jose import jwt, JWTError
 from app.db.models import User, Permission, RolePermission, Role
 from app.core.config.database import get_db
-from app.core.config.app_config import settings
-from app.core.security.jwt import get_user_id_from_token
+from app.core.security.jwt import (
+    decode_access_token,
+    _assert_token_version_valid,
+)
 from uuid import UUID
+
 
 async def get_user_permissions(user_id: UUID, db: AsyncSession):
     try:
@@ -42,26 +44,30 @@ def has_permission(required_permission: str):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
         token = auth.split(" ", 1)[1]
 
-        # 2) Decode & lấy user_id
-        user_id = get_user_id_from_token(token)
-        # 3) Query user
-        user = await db.get(User, user_id)
-        if not user:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-            
-        is_active = await db.scalar(select(User.is_active).where(User.id == user_id))
-        if is_active != 1:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User inactive")
+        # 2) Decode payload (có token_version)
+        payload = decode_access_token(token)
+        if not payload:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+            )
+
+        raw_id = payload.get("user_id")
+        if raw_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
+        user_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
+
+        # 3) User + token_version + active
+        user = await _assert_token_version_valid(db, user_id, payload.get("token_version"))
 
         # 4) Explicit query permissions
-        role_id = await db.scalar(select(User.role_id).where(User.id == user_id))
-        if role_id is None:
+        if user.role_id is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No role assigned")
 
         result = await db.execute(
             select(Permission.name)
             .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .where(RolePermission.role_id == role_id)
+            .where(RolePermission.role_id == user.role_id)
         )
         perms = [r[0] for r in result.all()]
 
