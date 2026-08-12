@@ -11,78 +11,10 @@ from collections import defaultdict
 from sqlalchemy import select, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import SQLAlchemyError
-from app.utils.helpers import isCheckMaxLevel
-from app.db.models import User, Tenant
-from app.schemas.requests.permission import CreatePermissionRequest, CreatePermissionTenantRequest
+from app.utils.helpers import is_platform_admin
+from app.db.models import User
+from app.schemas.requests.permission import CreatePermissionTenantRequest
 from uuid import UUID
-
-
-# async def get_permissions(
-#     db: AsyncSession,
-#     current_user: User,
-#     search: str | None = None,
-#     id: int | None = None
-# ):
-#     try:
-#         if id:
-#             return await get_permission_by_id(id, db, current_user)
-#         else:
-#             user_max_level = await isCheckMaxLevel(current_user, db)
-
-#             query = select(Permission)
-
-#             if not user_max_level:
-#                 query = query.where(Permission.tenant_id == current_user.tenant_id)
-
-#             # Thêm điều kiện tìm kiếm nếu có
-#             if search:
-#                 search = f"%{search}%"
-#                 query = query.where(
-#                     or_(
-#                         Permission.name.ilike(search),
-#                         Permission.description.ilike(search)
-#                     )
-#                 )
-
-#             result = await db.execute(query)
-#             permissions = result.scalars().all()
-
-#             # Không cần nhóm nữa, trả về 1 mảng phẳng
-#             flat_permissions = []
-#             for permission in permissions:
-#                 permission_name = str(permission.name)
-#                 if any(permission_name.startswith(prefix) for prefix in ("view_", "create_", "edit_", "delete_")):
-#                     permission_name = permission_name.split("_")[0]
-
-#                 flat_permissions.append({
-#                     "id": permission.id,
-#                     "name": permission_name,
-#                     "description": permission.description,
-#                     "belong_to": permission.belong_to  # nếu bạn vẫn muốn giữ thông tin này
-#                 })
-
-#             return api_response(
-#                 status=ResponseStatus.SUCCESS,
-#                 status_code=ResponseStatusCode.OK,
-#                 message="Lấy danh sách quyền thành công",
-#                 data=flat_permissions
-#             )
-
-
-#     except SQLAlchemyError as e:
-#         print(f"Database error: {str(e)}")
-#         return api_response(
-#             status=ResponseStatus.ERROR,
-#             status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
-#             message="Lỗi khi truy vấn cơ sở dữ liệu"
-#         )
-#     except Exception as e:
-#         print(f"Unexpected error: {str(e)}")
-#         return api_response(
-#             status=ResponseStatus.ERROR,
-#             status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
-#             message="Lỗi không xác định"
-#         )
 
 
 async def get_permissions(
@@ -95,12 +27,13 @@ async def get_permissions(
         if id:
             return await get_permission_by_id(id, db, current_user)
 
-        user_max_level = await isCheckMaxLevel(current_user, db)
+        # Permission là catalog dùng chung (không chia theo tenant).
+        # Non-platform chỉ thấy permission đang active.
+        user_max_level = await is_platform_admin(current_user, db)
 
         query = select(Permission)
-
         if not user_max_level:
-            query = query.where(Permission.tenant_id == current_user.tenant_id)
+            query = query.where(Permission.is_active == 1)
 
         if search:
             search = f"%{search}%"
@@ -158,17 +91,15 @@ async def get_permissions(
 
 async def get_permission_by_id(permission_id: UUID, db: AsyncSession, current_user: User):
     try:
-        user_max_level = await isCheckMaxLevel(current_user, db)
+        user_max_level = await is_platform_admin(current_user, db)
 
         if user_max_level:
             stmt = select(Permission).where(
                 Permission.id == permission_id
             )
         else:
-            # Chỉ được lấy quyền trong tenant của chính mình
             stmt = select(Permission).where(
                 Permission.id == permission_id,
-                Permission.tenant_id == current_user.tenant_id,
                 Permission.is_active == 1
             )
 
@@ -216,8 +147,9 @@ async def create_tenant_permission(
     db: AsyncSession,
     current_user: User
 ):
+    """Bulk create permissions trong catalog dùng chung (chỉ platform admin)."""
     try:
-        user_level_max = await isCheckMaxLevel(current_user, db)
+        user_level_max = await is_platform_admin(current_user, db)
 
         if not user_level_max:
             return api_response(
@@ -226,28 +158,10 @@ async def create_tenant_permission(
                 message="Tài khoản không có quyền tạo",
             )
 
-        # Kiểm tra tenant tồn tại chưa
-        check_stmt = select(Tenant).where(
-            Tenant.id == request_data.tenant_id
-        )
-        tenant_result = await db.execute(check_stmt)
-        tenant = tenant_result.scalar_one_or_none()
-
-        if not tenant:
-            return api_response(
-                status=ResponseStatus.ERROR,
-                status_code=ResponseStatusCode.NOT_FOUND,
-                message="Tenant không tồn tại"
-            )
- 
         permissions = []
 
         for item in request_data.permissions:
-            # Kiểm tra trùng lặp
-            existing_stmt = select(Permission).where(
-                Permission.name == item.name,
-                Permission.tenant_id == request_data.tenant_id
-            )
+            existing_stmt = select(Permission).where(Permission.name == item.name)
             existing = await db.execute(existing_stmt)
             if existing.scalar():
                 continue
@@ -255,7 +169,6 @@ async def create_tenant_permission(
             new_permission = Permission(
                 name=item.name,
                 description=item.description,
-                tenant_id=request_data.tenant_id
             )
             db.add(new_permission)
             permissions.append(new_permission)
@@ -264,7 +177,7 @@ async def create_tenant_permission(
             return api_response(
                 status=ResponseStatus.WARNING,
                 status_code=ResponseStatusCode.CONFLICT,
-                message="Tất cả quyền đã tồn tại trong tenant"
+                message="Tất cả quyền đã tồn tại"
             )
 
         await db.commit()
@@ -272,7 +185,7 @@ async def create_tenant_permission(
         return api_response(
             status=ResponseStatus.SUCCESS,
             status_code=ResponseStatusCode.CREATED,
-            message=f"Đã tạo {len(permissions)} quyền cho tenant"
+            message=f"Đã tạo {len(permissions)} quyền"
         )
 
     except SQLAlchemyError as e:
@@ -291,7 +204,7 @@ async def create_tenant_permission(
 
 async def update_permission(permission_id: UUID, permission_data, db: AsyncSession, current_user: User):
     try:
-        user_level_max = await isCheckMaxLevel(current_user, db)
+        user_level_max = await is_platform_admin(current_user, db)
 
         if not user_level_max:
             return api_response(
@@ -300,7 +213,6 @@ async def update_permission(permission_id: UUID, permission_data, db: AsyncSessi
                 message="Tài khoản không có quyền tạo",
             )
 
-        # Kiểm tra permission tồn tại
         stmt = select(Permission).where(
             Permission.id == permission_id
         )
@@ -314,29 +226,19 @@ async def update_permission(permission_id: UUID, permission_data, db: AsyncSessi
                 message="Quyền không tồn tại"
             )
 
-        # Kiểm tra tên mới đã tồn tại chưa (nếu cập nhật tên)
-        if permission_data.tenant_id is None: 
-             return api_response(
-                status=ResponseStatus.ERROR,
-                status_code=ResponseStatusCode.NOT_FOUND,
-                message="Thiếu tenant"
-            )
-        
         if permission_data.name and permission_data.name != permission.name:
             stmt = select(Permission).where(
                 Permission.name == permission_data.name,
-                Permission.tenant_id == permission_data.tenant_id,
-                Permission.id != permission.id 
+                Permission.id != permission.id
             )
             result = await db.execute(stmt)
             if result.scalar_one_or_none():
                 return api_response(
                     status=ResponseStatus.ERROR,
                     status_code=ResponseStatusCode.CONFLICT,
-                    message="Tên quyền đã tồn tại trong tenant"
+                    message="Tên quyền đã tồn tại"
                 )
 
-        # Cập nhật thông tin
         update_data = permission_data.model_dump(exclude_unset=True)
         for key, value in update_data.items():
             setattr(permission, key, value)
@@ -374,7 +276,7 @@ async def update_permission(permission_id: UUID, permission_data, db: AsyncSessi
 
 async def delete_permission(permission_id: UUID, db: AsyncSession, current_user: User):
     try:
-        user_level_max = await isCheckMaxLevel(current_user, db)
+        user_level_max = await is_platform_admin(current_user, db)
         if not user_level_max:
             return api_response(
                 status=ResponseStatus.ERROR,
@@ -382,7 +284,6 @@ async def delete_permission(permission_id: UUID, db: AsyncSession, current_user:
                 message="Tài khoản không có quyền xóa",
             )
 
-        # Kiểm tra permission tồn tại
         stmt = select(Permission).where(
             Permission.id == permission_id
         )
@@ -396,10 +297,8 @@ async def delete_permission(permission_id: UUID, db: AsyncSession, current_user:
                 message="Quyền không tồn tại"
             )
         
-        # Kiểm tra xem quyền có được sử dụng trong role không
         stmt = select(RolePermission).where(
             RolePermission.permission_id == permission_id,
-            RolePermission.tenant_id == permission.tenant_id
         )
         result = await db.execute(stmt)
         if result.scalar_one_or_none():
@@ -409,27 +308,22 @@ async def delete_permission(permission_id: UUID, db: AsyncSession, current_user:
                 message="Quyền đang được sử dụng trong role"
             )
         
-        # Cập nhật permission thành inactive và xóa tất cả bản ghi ở role permission
         await db.execute(
             update(Permission)
             .where(Permission.id == permission_id)
-            .values(is_active=0)  
+            .values(is_active=0)
         )
-        # Xóa các role_permission liên quan
         await db.execute(
             delete(RolePermission).where(
-                and_(
-                    RolePermission.permission_id == permission_id,
-                    RolePermission.tenant_id == permission.tenant_id
-                )
+                RolePermission.permission_id == permission_id,
             )
-        )        
-        await db.commit()   
+        )
+        await db.commit()
 
         return api_response(
             status=ResponseStatus.SUCCESS,
             status_code=ResponseStatusCode.OK,
-            message="Xóa quyền khỏi tenant thành công"
+            message="Xóa quyền thành công"
         )
 
     except SQLAlchemyError as e:

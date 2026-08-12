@@ -13,17 +13,20 @@ from uuid import UUID
 
 async def get_user_permissions(user_id: UUID, db: AsyncSession):
     try:
-        # Truy vấn trực tiếp permissions từ database
+        # Chỉ lấy permission/role đang active (soft-disable phải có hiệu lực)
         stmt = (
             select(Permission.name)
             .join(RolePermission, Permission.id == RolePermission.permission_id)
             .join(Role, RolePermission.role_id == Role.id)
             .join(User, User.role_id == Role.id)
-            .where(User.id == user_id)
+            .where(
+                User.id == user_id,
+                Role.is_active == 1,
+                Permission.is_active == 1,
+            )
         )
         result = await db.execute(stmt)
         permissions = [row[0] for row in result.all()]
-        print(f"Check result: {permissions}")
         return permissions
     except SQLAlchemyError as e:
         print(f"Error getting user permissions: {str(e)}")
@@ -60,16 +63,30 @@ def has_permission(required_permission: str):
         # 3) User + token_version + active
         user = await _assert_token_version_valid(db, user_id, payload.get("token_version"))
 
-        # 4) Explicit query permissions
+        # 4) Explicit query permissions (role + permission phải đang active)
         if user.role_id is None:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No role assigned")
 
         result = await db.execute(
             select(Permission.name)
             .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .where(RolePermission.role_id == user.role_id)
+            .join(Role, Role.id == RolePermission.role_id)
+            .where(
+                RolePermission.role_id == user.role_id,
+                Role.is_active == 1,
+                Permission.is_active == 1,
+            )
         )
         perms = [r[0] for r in result.all()]
+
+        # Role đã soft-delete → coi như không còn quyền
+        if not perms:
+            role = await db.get(Role, user.role_id)
+            if role is None or role.is_active != 1:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Role is inactive or not found",
+                )
 
         # 5) Check
         if required_permission not in perms:

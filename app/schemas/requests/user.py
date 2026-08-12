@@ -1,10 +1,50 @@
 from pydantic import BaseModel, EmailStr, Field, StringConstraints
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 from uuid import UUID
-from typing import Optional
+from datetime import datetime
 
 
-class CreateUserRequest(BaseModel):
+class UserWebphoneWriteFields(BaseModel):
+    """Các trường softphone/SIP trên User (ghi — không trả secret ở response thường)."""
+    webphone_enabled: bool | None = None
+    sip_extension: str | None = Field(default=None, max_length=20)
+    sip_username: str | None = Field(default=None, max_length=100)
+    sip_password: str | None = Field(
+        default=None,
+        max_length=255,
+        description="Mật khẩu SIP/3CX (lưu DB, chỉ admin chỉnh; không trả trong GET user)",
+    )
+    sip_domain: str | None = Field(default=None, max_length=255)
+    sip_ws_server: str | None = Field(default=None, max_length=255)
+    sip_port: int | None = None
+    sip_protocol: str | None = Field(default=None, max_length=10)
+    webphone_api_key: str | None = Field(
+        default=None,
+        max_length=255,
+        description="API key webphone (secret — không trả trong GET user)",
+    )
+    webphone_process_id: str | None = Field(default=None, max_length=50)
+    webphone_agent_id: str | None = Field(default=None, max_length=50)
+    call_recording_enabled: bool | None = None
+    call_log_enabled: bool | None = None
+
+
+class UserWebphoneResponseFields(BaseModel):
+    """Snapshot webphone không chứa secret (sip_password, webphone_api_key)."""
+    webphone_enabled: bool = False
+    sip_extension: str | None = None
+    sip_username: str | None = None
+    sip_domain: str | None = None
+    sip_ws_server: str | None = None
+    sip_port: int | None = None
+    sip_protocol: str | None = None
+    webphone_process_id: str | None = None
+    webphone_agent_id: str | None = None
+    call_recording_enabled: bool = True
+    call_log_enabled: bool = True
+
+
+class CreateUserRequest(UserWebphoneWriteFields):
     username: Annotated[str, StringConstraints(min_length=3, max_length=50)]
     email: EmailStr
     password: Annotated[str, StringConstraints(min_length=6)]
@@ -13,31 +53,20 @@ class CreateUserRequest(BaseModel):
     role_id: Optional[UUID] | None = None
     level_id: Optional[UUID] | None = None
     tenant_id: Optional[UUID] | None = None
+    is_platform_admin: bool | None = Field(
+        default=None,
+        description="Chỉ platform admin mới được set khi tạo user",
+    )
     meta_data: dict[str, Any] | None = Field(
         default=None,
         description=(
             "**Chỉ dùng cho messaging** (không map sang `role_id` / RBAC nội bộ). "
-            "Toàn bộ key trong `meta_data` được merge vào payload Agent trong account tenant "
-            "(Application API `/accounts/{id}/agents/...`).\n\n"
-            "- `meta_data.role` = role **trên messaging** (vd `agent`, `administrator`), khác hẳn `role_id` ở body.\n"
-            "- `meta_data.password` = đổi mật khẩu **agent trên messaging** (không lưu vào DB snapshot).\n"
-            "- Có thể dùng `chatwoot_agent` (dict) để gom nhóm; nếu cùng key với root (vd `role`), **root ghi đè**.\n"
-            "- Gọi endpoint Platform User (`/messaging/users/...`) thì dùng luồng riêng trong `handle_chatwoot`."
+            "Toàn bộ key trong `meta_data` được merge vào payload Agent trong account tenant."
         ),
-        json_schema_extra={
-            "example": {
-                "role": "administrator",
-                "display_name": "Nguyễn Xuân Mạnh",
-                "password": "NewStrongPassword#1",
-                "chatwoot_agent": {
-                    "availability_status": "online",
-                    "custom_attributes": {"team": "CSKH"},
-                },
-            }
-        },
     )
 
-class UpdateUserRequest(BaseModel):
+
+class UpdateUserRequest(UserWebphoneWriteFields):
     username: Annotated[str, StringConstraints(min_length=3, max_length=50)] | None = None
     email: EmailStr | None = None
     password: Annotated[str, StringConstraints(min_length=6)] | None = None
@@ -47,39 +76,36 @@ class UpdateUserRequest(BaseModel):
     level_id: Optional[UUID] | None = None
     is_active: int | None = None
     tenant_id: Optional[UUID] | None = None
+    is_platform_admin: bool | None = Field(
+        default=None,
+        description="Chỉ platform admin mới được đổi cờ này",
+    )
     meta_data: dict[str, Any] | None = Field(
         default=None,
-        description=(
-            "**Chỉ dùng cho Messaging Agent** trong account của tenant (không đổi `role_id` nội bộ). "
-            "Chỉ cần gửi `meta_data` (vd `role`, `password`) là hệ thống sẽ **PATCH agent lên messaging**, "
-            "không bắt buộc đổi fullname/email cùng lúc.\n\n"
-            "- Merge với meta_data cũ (deep-merge cho `chatwoot_agent`).\n"
-            "- `meta_data.role` / `password` áp dụng cho messaging, không phải mật khẩu đăng nhập omnichannel trừ khi bạn gửi `password` ở root body."
-        ),
-        json_schema_extra={
-            "example": {
-                "role": "administrator",
-                "password": "RotatePwd#2026",
-                "custom_attributes": {"region": "HN"},
-                "chatwoot_agent": {"availability_status": "busy"},
-            }
-        },  
+        description="**Chỉ dùng cho Messaging Agent** trong account của tenant.",
     )
+
 
 class ResponseUser(BaseModel):
     id: UUID
     username: str
-    email: EmailStr
+    email: EmailStr | None = None
     fullname: str | None = None
+    chat_id: int | None = None
+    create_day: datetime | None = None
+    is_active: int | None = 1
     role_id: Optional[UUID] | None = None
     level_id: Optional[UUID] | None = None
     tenant_id: Optional[UUID] | None = None
-    meta_data: dict[str, Any] | None = Field(
+    is_platform_admin: bool = False
+    role: str | None = None
+    level: str | None = None
+    order_level: int | None = None
+    meta_data: dict[str, Any] | None = None
+    webphone: UserWebphoneResponseFields | None = None
+    webcall: dict[str, Any] | None = Field(
         default=None,
-        description=(
-            "Lưu cấu hình client + snapshot messaging.\n\n"
-            "- `chatwoot_agent`: snapshot payload đã gửi sang messaging (không lưu password).\n"
-            "- Các key khác (vd `role` ở root meta_data) do client gửi; không phải RBAC nội bộ."
-        ),
+        description="Tóm tắt softphone (không secret). Chi tiết: GET /user/webcall",
     )
-
+    messaging_synced: bool | None = None
+    permissions: list[str] | None = None

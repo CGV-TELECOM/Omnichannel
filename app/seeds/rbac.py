@@ -184,7 +184,6 @@ async def seed_rbac(db: AsyncSession):
             permission = Permission(
                 name=name, 
                 description=f"Permission to {name}",
-                tenant_id=default_tenant.id if default_tenant else None,
                 belong_to=belong_to,
             )
             db.add(permission)
@@ -196,8 +195,8 @@ async def seed_rbac(db: AsyncSession):
     admin_role_name = "admin"
     user_role_name = "user"
 
-    admin_role = await _get_or_create_role(db, admin_role_name, "Administrator role", 1000, default_tenant.id if default_tenant else None)
-    user_role = await _get_or_create_role(db, user_role_name, "Regular user role", 10, default_tenant.id if default_tenant else None)
+    admin_role = await _get_or_create_role(db, admin_role_name, "Administrator role", 1000)
+    user_role = await _get_or_create_role(db, user_role_name, "Regular user role", 10)
 
     # Step 3: Create levels if they don't exist
     levels = [
@@ -230,32 +229,23 @@ async def seed_rbac(db: AsyncSession):
     for role in all_admin_roles:
         await _assign_permissions_to_role(db, role, permissions)
 
-    # Assign some permissions to the "user" role (và mọi role tên user).
+    # Role "user" = agent vận hành (least privilege).
+    # KHÔNG có: CRUD user/org (department/group), view_roles/tenants,
+    # mutate ticket flow/step (cấu hình), quản trị messaging team/user.
     user_permissions = [
-        "current_user",  # Example:  Users can view items.
-        "create_users",
-        "edit_users",
-        "view_users",
-        "delete_users",
+        "current_user",
+        "view_users",  # để assign ticket / conversation
         "view_levels",
         "view_departments",
-        "create_department",
-        "edit_department",
-        "delete_department",
         "view_groups",
-        "create_group",
-        "edit_group",
-        "delete_group",
-        "view_roles",
         "view_tags",
         "create_tag",
         "edit_tag",
-        # Ticket permissions
+        # Ticket — vận hành (không cấu hình flow/step)
         "view_tickets",
         "create_ticket",
         "edit_ticket",
         "assign_ticket",
-        # Ticket related permissions
         "view_ticket_events",
         "create_ticket_event",
         "view_ticket_templates",
@@ -263,28 +253,19 @@ async def seed_rbac(db: AsyncSession):
         "create_ticket_context",
         "view_ticket_extensions",
         "create_ticket_extension",
-        # Ticket Flow permissions
         "view_ticket_flows",
-        "create_ticket_flow",
-        "edit_ticket_flow",
-        # Ticket Flow Instance permissions
         "view_ticket_flow_instances",
         "create_ticket_flow_instance",
         "edit_ticket_flow_instance",
-        # Ticket Flow Step permissions
         "view_ticket_flow_steps",
-        "create_ticket_flow_step",
-        "edit_ticket_flow_step",
-        # Customer (user thường chỉ được xem/tạo/sửa, KHÔNG được xóa)
+        # Customer
         "view_customers",
         "create_customer",
         "edit_customer",
-        # Customer Provided Info (user thường chỉ được xem/tạo/sửa, KHÔNG được xóa)
         "view_customer_provided_info",
         "create_customer_provided_info",
         "edit_customer_provided_info",
-        "view_tenants",
-        # Messaging — agent: view/create/edit; admin-only delete / provision / sync
+        # Messaging — agent ops (không admin team/user)
         "view_messaging_accounts",
         "view_messaging_conversations",
         "create_messaging_conversation",
@@ -300,15 +281,10 @@ async def seed_rbac(db: AsyncSession):
         "edit_messaging_custom_filter",
         "view_messaging_agents",
         "view_messaging_teams",
-        "create_messaging_team",
-        "edit_messaging_team",
-        "manage_messaging_team_members",
         "view_messaging_agent_bots",
         "view_messaging_users",
-        "create_messaging_user",
-        "edit_messaging_user",
         "view_messaging_reports",
-        # Call log — agent: xem/tạo/sửa + xem timeline events (không delete)
+        # Call log
         "view_call_logs",
         "create_call_log",
         "edit_call_log",
@@ -319,15 +295,22 @@ async def seed_rbac(db: AsyncSession):
     if not all_user_roles:
         all_user_roles = [user_role]
     for role in all_user_roles:
-        await _assign_permissions_to_role(db, role, user_permissions_objects)
+        # Sync đầy đủ (thêm thiếu + gỡ thừa) để least-privilege có hiệu lực trên DB cũ
+        await _sync_permissions_to_role(db, role, user_permissions_objects)
 
     # Step 5: Create an admin user if they don't exist
     super_admin_level = next((l for l in created_levels if l.name == "Admin"), None)
-    admin_user = await _create_admin_user(db, admin_role, super_admin_level)
+    admin_user = await _create_admin_user(
+        db, admin_role, super_admin_level,
+        tenant_id=default_tenant.id if default_tenant else None,
+    )
 
     # Step 6: Create a regular user.
     user_level = next((l for l in created_levels if l.name == "User"), None)
-    await _create_regular_user(db, user_role, user_level)
+    await _create_regular_user(
+        db, user_role, user_level,
+        tenant_id=default_tenant.id if default_tenant else None,
+    )
 
     # Step 7: Create default Chatwoot mappings for Tenant and Admin
     await _seed_chatwoot_mappings(db, default_tenant, admin_user)
@@ -364,7 +347,7 @@ async def _purge_obsolete_permissions(db: AsyncSession) -> None:
     )
 
 
-async def _get_or_create_role(db: AsyncSession, role_name: str, description: str, role_order: int, tenant_id: UUID | None = None) -> Role:
+async def _get_or_create_role(db: AsyncSession, role_name: str, description: str, role_order: int) -> Role:
     """
     Gets an existing role or creates a new one.
 
@@ -373,7 +356,6 @@ async def _get_or_create_role(db: AsyncSession, role_name: str, description: str
         role_name: The name of the role.
         description: The description of the role.
         role_order: The order of the role.
-        tenant_id: Optional tenant ID (UUID).
 
     Returns:
         The Role object.
@@ -386,7 +368,6 @@ async def _get_or_create_role(db: AsyncSession, role_name: str, description: str
             name=role_name, 
             description=description, 
             role_order=role_order,
-            tenant_id=tenant_id
         )
         db.add(role)
         await db.commit()
@@ -395,7 +376,7 @@ async def _get_or_create_role(db: AsyncSession, role_name: str, description: str
 
 async def _assign_permissions_to_role(db: AsyncSession, role: Role, permissions: list[Permission]):
     """
-    Assigns permissions to a role.
+    Assigns permissions to a role (chỉ thêm, không gỡ).
 
     Args:
         db: The database session.
@@ -410,11 +391,51 @@ async def _assign_permissions_to_role(db: AsyncSession, role: Role, permissions:
             db.add(RolePermission(
                 role_id=role.id, 
                 permission_id=perm.id,
-                tenant_id=role.tenant_id
             ))
     await db.commit()
 
-async def _create_admin_user(db: AsyncSession, role: Role, level: Levels | None = None):
+
+async def _sync_permissions_to_role(db: AsyncSession, role: Role, permissions: list[Permission]):
+    """
+    Đồng bộ đúng tập permission cho role: thêm thiếu + xóa thừa.
+    Dùng cho role "user" (least privilege) để seed có thể thu hẹp quyền trên DB đã chạy.
+    """
+    desired_ids = {p.id for p in permissions}
+
+    existing = (
+        await db.execute(
+            select(RolePermission).where(RolePermission.role_id == role.id)
+        )
+    ).scalars().all()
+
+    removed = 0
+    for rp in existing:
+        if rp.permission_id not in desired_ids:
+            await db.delete(rp)
+            removed += 1
+
+    added = 0
+    existing_ids = {rp.permission_id for rp in existing}
+    for perm in permissions:
+        if perm.id not in existing_ids:
+            db.add(RolePermission(
+                role_id=role.id,
+                permission_id=perm.id,
+            ))
+            added += 1
+
+    await db.commit()
+    print(
+        f"🔄 Sync role '{role.name}': +{added} / -{removed} "
+        f"(còn {len(desired_ids)} permissions)"
+    )
+
+async def _create_admin_user(
+    db: AsyncSession,
+    role: Role,
+    level: Levels | None = None,
+    tenant_id: UUID | None = None,
+):
     """
     Creates the admin user if it does not exist.
     
@@ -422,6 +443,7 @@ async def _create_admin_user(db: AsyncSession, role: Role, level: Levels | None 
         db: The database session.
         role: The Role object (with UUID id).
         level: Optional Levels object (with UUID id).
+        tenant_id: Tenant gắn cho user seed (không lấy từ Role).
     """
     stmt = select(User).filter_by(username="admin")
     result = await db.execute(stmt)
@@ -435,14 +457,24 @@ async def _create_admin_user(db: AsyncSession, role: Role, level: Levels | None 
             level_id=level.id if level else None,  # UUID or None
             is_active=1,
             email="admin@example.com",
-            tenant_id=role.tenant_id
+            tenant_id=tenant_id,
+            is_platform_admin=True,
         )
         db.add(admin_user)
         await db.commit()
         await db.refresh(admin_user)
+    elif not admin_user.is_platform_admin:
+        admin_user.is_platform_admin = True
+        await db.commit()
+        await db.refresh(admin_user)
     return admin_user
 
-async def _create_regular_user(db: AsyncSession, role: Role, level: Levels | None = None):
+async def _create_regular_user(
+    db: AsyncSession,
+    role: Role,
+    level: Levels | None = None,
+    tenant_id: UUID | None = None,
+):
     """
     Creates a regular user if it does not exist.
     
@@ -450,6 +482,7 @@ async def _create_regular_user(db: AsyncSession, role: Role, level: Levels | Non
         db: The database session.
         role: The Role object (with UUID id).
         level: Optional Levels object (with UUID id).
+        tenant_id: Tenant gắn cho user seed (không lấy từ Role).
     """
     stmt = select(User).filter_by(username="user")
     result = await db.execute(stmt)
@@ -463,7 +496,7 @@ async def _create_regular_user(db: AsyncSession, role: Role, level: Levels | Non
             level_id=level.id if level else None,  # UUID or None
             is_active=1,
             email="user@example.com",
-            tenant_id=role.tenant_id
+            tenant_id=tenant_id,
         )
         db.add(regular_user)
         await db.commit()

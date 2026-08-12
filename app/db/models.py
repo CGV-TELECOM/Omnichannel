@@ -43,6 +43,9 @@ class User(Base):
     role_id = Column(UUID(as_uuid=True), ForeignKey("roles.id"))
     level_id = Column(UUID(as_uuid=True), ForeignKey("levels.id"))
     tenant_id = Column(UUID(as_uuid=True), nullable=True)
+    # Platform admin (CGV ops): được phép thao tác cross-tenant.
+    # Khác với "admin của 1 tenant" (level/role cao nhất trong tenant nhưng KHÔNG bypass tenant).
+    is_platform_admin = Column(Boolean, nullable=False, default=False, server_default=text("false"))
 
     # WEBPHONE / SIP / 3CX
     webphone_enabled = Column(Boolean, default=False)
@@ -108,7 +111,6 @@ class Role(Base):
     role_order = Column(Integer)
     users = relationship("User", back_populates="role", lazy="selectin")
     role_permissions = relationship("RolePermission", back_populates="role")
-    tenant_id = Column(UUID(as_uuid=True), nullable=True)
     is_active = Column(Integer, default=1)
     
     
@@ -119,7 +121,6 @@ class RolePermission(Base):
     permission_id = Column(UUID(as_uuid=True), ForeignKey("permissions.id"))
     role = relationship("Role", back_populates="role_permissions")
     permission = relationship("Permission", back_populates="role_permissions")
-    tenant_id = Column(UUID(as_uuid=True), nullable=True)
 
 class Permission(Base):
     __tablename__ = "permissions"
@@ -128,7 +129,6 @@ class Permission(Base):
     description = Column(String(255))
     role_permissions = relationship("RolePermission", back_populates="permission")
     belong_to = Column(String(100), nullable=False, default="")
-    tenant_id = Column(UUID(as_uuid=True), nullable=True)
     is_active = Column(Integer, default=1)
     
 class GroupUser(Base):

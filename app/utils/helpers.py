@@ -3,7 +3,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import  func
 from typing import Optional, cast
-# Hàm check chung level max
+
+
+async def is_platform_admin(current_user, db: AsyncSession | None = None) -> bool:
+    """
+    Platform admin (CGV ops): duy nhất nhóm này được thao tác cross-tenant.
+
+    Thay thế cho isCheckMaxLevel ở các chỗ dùng để bypass tenant:
+    admin của 1 tenant (level Admin trong tenant) KHÔNG còn được coi là super admin.
+    Tham số db giữ lại để tương thích chữ ký với isCheckMaxLevel tại các call site.
+    """
+    return bool(getattr(current_user, "is_platform_admin", False))
+
+
+# DEPRECATED: chỉ so max(level_order) TOÀN HỆ THỐNG nên admin tenant cũng thành
+# "super admin" và bypass tenant. Dùng is_platform_admin (cross-tenant) hoặc
+# isCheckMaxLevelTenant (cao nhất trong tenant) thay thế.
 async def isCheckMaxLevel(current_user, db : AsyncSession):
     stmt = select(func.max(Levels.level_order)).select_from(Levels)
     result = await db.execute(stmt)

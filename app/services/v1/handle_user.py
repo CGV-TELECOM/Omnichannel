@@ -17,12 +17,111 @@ from app.core.security.password_utils import hash_password
 from sqlalchemy import update
 from typing import Any, Optional, cast
 from app.schemas.requests.user import CreateUserRequest, UpdateUserRequest
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 from uuid import UUID
 from datetime import datetime, timezone
 from app.integrations.chatwoot import client as chatwoot_client
 from app.db.models import ChatwootLegacyMap, ChatwootMapResourceType
 from app.core.config.webcall_defaults import merge_webcall_config
+
+
+def _level_order_of(user: User) -> int:
+    """level_order null-safe (thiếu level coi như 0 — thấp nhất)."""
+    if user.level is not None and user.level.level_order is not None:
+        return user.level.level_order
+    return 0
+
+
+def _role_order_of(user: User) -> int:
+    """role_order null-safe (thiếu role coi như 0 — thấp nhất)."""
+    if user.role is not None and user.role.role_order is not None:
+        return user.role.role_order
+    return 0
+
+
+_WEBPHONE_WRITE_FIELDS = frozenset({
+    "webphone_enabled",
+    "sip_extension",
+    "sip_username",
+    "sip_password",
+    "sip_domain",
+    "sip_ws_server",
+    "sip_port",
+    "sip_protocol",
+    "webphone_api_key",
+    "webphone_process_id",
+    "webphone_agent_id",
+    "call_recording_enabled",
+    "call_log_enabled",
+})
+
+
+def _webphone_kwargs_from_request(
+    data: CreateUserRequest | UpdateUserRequest,
+    *,
+    for_create: bool = False,
+) -> dict[str, Any]:
+    """Lấy các field webphone/SIP từ body (chỉ key được gửi khi update)."""
+    dump = data.model_dump(
+        exclude_none=True,
+        exclude_unset=not for_create,
+    )
+    return {k: v for k, v in dump.items() if k in _WEBPHONE_WRITE_FIELDS}
+
+
+def _webphone_response_dict(user: User) -> dict[str, Any]:
+    """Trả webphone không chứa secret."""
+    return {
+        "webphone_enabled": bool(user.webphone_enabled),
+        "sip_extension": user.sip_extension,
+        "sip_username": user.sip_username,
+        "sip_domain": user.sip_domain,
+        "sip_ws_server": user.sip_ws_server,
+        "sip_port": user.sip_port,
+        "sip_protocol": user.sip_protocol,
+        "webphone_process_id": user.webphone_process_id,
+        "webphone_agent_id": user.webphone_agent_id,
+        "call_recording_enabled": user.call_recording_enabled is not False,
+        "call_log_enabled": user.call_log_enabled is not False,
+    }
+
+
+def _serialize_user(
+    user: User,
+    *,
+    tenant: Tenant | None = None,
+    permissions: list[str] | None = None,
+    viewer_is_platform_admin: bool = False,
+    messaging_synced: bool | None = None,
+    include_webcall: bool = True,
+) -> dict[str, Any]:
+    """Chuẩn hóa response user — đủ field model (trừ password/token_version/secret SIP)."""
+    payload: dict[str, Any] = {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "fullname": user.fullname,
+        "chat_id": user.chat_id,
+        "create_day": user.create_day,
+        "is_active": user.is_active,
+        "role_id": user.role_id,
+        "level_id": user.level_id,
+        "tenant_id": user.tenant_id,
+        "role": user.role.name if user.role else None,
+        "level": user.level.name if user.level else None,
+        "order_level": user.level.level_order if user.level else None,
+        "meta_data": user.meta_data,
+        "webphone": _webphone_response_dict(user),
+    }
+    if viewer_is_platform_admin:
+        payload["is_platform_admin"] = bool(user.is_platform_admin)
+    if permissions is not None:
+        payload["permissions"] = permissions
+    if messaging_synced is not None:
+        payload["messaging_synced"] = messaging_synced
+    if include_webcall:
+        payload["webcall"] = _build_webcall_summary(user, tenant)
+    return payload
 
 
 def _build_webcall_credentials(user: User, tenant: Tenant | None) -> dict[str, Any]:
@@ -265,22 +364,17 @@ async def get_current_user_or_none(request, db : AsyncSession):
 
         tenant = await db.get(Tenant, user.tenant_id) if user.tenant_id else None
 
-        user_data = {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "fullname": user.fullname,
-            "is_active": user.is_active,
-            "role": user.role.name if user.role else None,
-            "level": user.level.name if user.level else None,
-            "tenant_id": user.tenant_id,
-            "graph_id": tenant.graph_id if tenant else None,
-            "agent_id": tenant.agent_id if tenant else None,
-            "graph_activated": tenant.graph_activated if tenant else None,
-            "meta_data": user.meta_data,
-            "permissions": permissions,
-            "webcall": _build_webcall_summary(user, tenant),
-        }
+        viewer_platform = await is_platform_admin(user, db)
+        user_data = _serialize_user(
+            user,
+            tenant=tenant,
+            permissions=permissions,
+            viewer_is_platform_admin=viewer_platform,
+            include_webcall=True,
+        )
+        user_data["graph_id"] = tenant.graph_id if tenant else None
+        user_data["agent_id"] = tenant.agent_id if tenant else None
+        user_data["graph_activated"] = tenant.graph_activated if tenant else None
         
         return api_response(
             status=ResponseStatus.SUCCESS,
@@ -371,10 +465,7 @@ async def get_all_users(
         if id:
             return await get_user_by_id(id, db, current_user)
 
-        # Lấy max level_order
-        stmt = select(func.max(Levels.level_order)).select_from(Levels)
-        result = await db.execute(stmt)
-        max_level_order = cast(int, result.scalar_one_or_none() or 0)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         # Lấy current user's level_order
         current_level_order = 0
@@ -393,8 +484,8 @@ async def get_all_users(
         filters = [User.id != current_user.id]
         count_filters = [User.id != current_user.id]
 
-        # Nếu không phải super admin
-        if current_level_order != max_level_order:
+        # Nếu không phải platform admin -> chỉ thấy user cùng tenant, level thấp hơn
+        if not is_super_admin:
             filters.extend([
                 User.tenant_id == current_user.tenant_id,
                 User.is_active == 1,
@@ -435,7 +526,7 @@ async def get_all_users(
 
         # Đếm tổng số
         count_query = select(func.count()).select_from(User)
-        if current_level_order != max_level_order:
+        if not is_super_admin:
             count_query = count_query.join(Levels, User.level_id == Levels.id)
         count_query = count_query.where(*count_filters)
 
@@ -452,7 +543,11 @@ async def get_all_users(
                     .join(Role, User.role_id == Role.id)
                     .join(RolePermission, Role.id == RolePermission.role_id)
                     .join(Permission, RolePermission.permission_id == Permission.id)
-                    .where(User.id.in_(user_ids))
+                    .where(
+                        User.id.in_(user_ids),
+                        Role.is_active == 1,
+                        Permission.is_active == 1,
+                    )
                 )
                 result_perm = await db.execute(stmt_perm)
                 for uid, perm_name in result_perm.all():
@@ -463,21 +558,18 @@ async def get_all_users(
                 print(f"Error querying batch user permissions: {str(e)}")
 
         # Tạo danh sách dữ liệu trả về
+        viewer_platform = await is_platform_admin(current_user, db)
         user_data = []
         for user in users:
             permissions = permissions_map.get(user.id, [])
-            user_data.append({
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "fullname": user.fullname,
-                "role": user.role.name if user.role else None,
-                "level": user.level.name if user.level else None,
-                "tenant_id": user.tenant_id,
-                "is_active": user.is_active,
-                "meta_data": user.meta_data,
-                "permissions": permissions
-            })
+            user_data.append(
+                _serialize_user(
+                    user,
+                    permissions=permissions,
+                    viewer_is_platform_admin=viewer_platform,
+                    include_webcall=True,
+                )
+            )
 
         return api_response(
             status=ResponseStatus.SUCCESS,
@@ -512,10 +604,7 @@ async def get_all_users(
 
 async def get_user_by_id(user_id: UUID, db: AsyncSession, current_user: User):
     try:
-        # Get max level order
-        stmt = select(func.max(Levels.level_order)).select_from(Levels)
-        result = await db.execute(stmt)
-        max_level_order = cast(int, result.scalar_one_or_none() or 0)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         # Get current user's level
         current_level_order = 0
@@ -546,7 +635,7 @@ async def get_user_by_id(user_id: UUID, db: AsyncSession, current_user: User):
             )
 
         # Check if current user can access this user's info
-        if current_level_order < max_level_order:  # Nếu không phải super admin
+        if not is_super_admin:  # Nếu không phải platform admin
             if user.is_active == 0:
                 return api_response(
                     status=ResponseStatus.WARNING,
@@ -561,21 +650,17 @@ async def get_user_by_id(user_id: UUID, db: AsyncSession, current_user: User):
                 )
 
         permissions = await get_user_permissions(user_id, db)
-        user_data = ({
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "fullname": user.fullname,
-                "role": user.role.name if user.role else None,
-                "level": user.level.name if user.level else None,
-                "role_id": user.role.id if user.role else None,
-                "level_id": user.level.id if user.level else None,
-                "order_level": user.level.level_order if user.level else None,
-                "tenant_id": user.tenant_id,
-                "is_active": user.is_active,
-                "meta_data": user.meta_data,
-                "permissions": permissions
-            })
+        viewer_platform = await is_platform_admin(current_user, db)
+        tenant = await db.get(Tenant, user.tenant_id) if user.tenant_id else None
+        cw_map = await _get_chatwoot_user_map_by_local(db, user.id)
+        user_data = _serialize_user(
+            user,
+            tenant=tenant,
+            permissions=permissions,
+            viewer_is_platform_admin=viewer_platform,
+            messaging_synced=cw_map is not None,
+            include_webcall=True,
+        )
         return api_response(
             status=ResponseStatus.SUCCESS,
             status_code=ResponseStatusCode.OK,
@@ -599,7 +684,7 @@ async def get_user_by_id(user_id: UUID, db: AsyncSession, current_user: User):
 
 async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_user: User):
     try:
-        is_supper_admin = await isCheckMaxLevel(current_user, db)
+        is_supper_admin = await is_platform_admin(current_user, db)
         # check tenant_id
         if user_data.tenant_id:
             stmt = select(Tenant).where(and_(Tenant.id == user_data.tenant_id, Tenant.is_active == 1))
@@ -665,7 +750,7 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
             if not stmt_result:
                 return api_response(ResponseStatus.ERROR, ResponseStatusCode.NOT_FOUND, "Vai trò không tồn tại hoặc đã bị khóa")
             else:
-                if not is_supper_admin and current_user.role.role_order <= stmt_result.role_order:
+                if not is_supper_admin and _role_order_of(current_user) <= (stmt_result.role_order or 0):
                     return api_response(ResponseStatus.ERROR, ResponseStatusCode.FORBIDDEN, "Bạn chỉ có thể tạo người dùng có vai trò nhỏ hơn vai trò của bạn")
             
         # Check level
@@ -680,7 +765,7 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
                     message="Level không tồn tại"
                 )
             # Check if current user can create user with this level
-            if not is_supper_admin and new_level.level_order >= current_user.level.level_order:
+            if not is_supper_admin and new_level.level_order >= _level_order_of(current_user):
                 return api_response(
                     status=ResponseStatus.ERROR,
                     status_code=ResponseStatusCode.FORBIDDEN,
@@ -688,6 +773,7 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
                 )
         
         # Create new user
+        webphone_kwargs = _webphone_kwargs_from_request(user_data, for_create=True)
         new_user = User(
             username=user_data.username,
             email=user_data.email,
@@ -698,6 +784,10 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
             level_id=user_data.level_id,
             tenant_id=user_tenant_id,
             meta_data=dict(user_data.meta_data) if user_data.meta_data is not None else None,
+            is_platform_admin=bool(user_data.is_platform_admin)
+            if is_supper_admin and user_data.is_platform_admin is not None
+            else False,
+            **webphone_kwargs,
         )
 
         db.add(new_user)
@@ -793,19 +883,14 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
 
         await db.refresh(new_user)
 
-        # Tạo response data không bao gồm password
-        user_response = {
-            "id": new_user.id,
-            "username": new_user.username,
-            "email": new_user.email,
-            "fullname": new_user.fullname,
-            "role_id": new_user.role_id,
-            "level_id": new_user.level_id,
-            "is_active": new_user.is_active,
-            "tenant_id": new_user.tenant_id,
-            "meta_data": new_user.meta_data,
-            "messaging_synced": True,
-        }
+        tenant = await db.get(Tenant, new_user.tenant_id) if new_user.tenant_id else None
+        user_response = _serialize_user(
+            new_user,
+            tenant=tenant,
+            viewer_is_platform_admin=is_supper_admin,
+            messaging_synced=True,
+            include_webcall=True,
+        )
 
         return api_response(
             status=ResponseStatus.SUCCESS,
@@ -831,7 +916,7 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
 
 async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSession, current_user: User):
     try:
-        is_supper_admin = await isCheckMaxLevel(current_user, db)
+        is_supper_admin = await is_platform_admin(current_user, db)
         stmt = None
         if is_supper_admin:
             # Get user to update
@@ -849,13 +934,13 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
         
 
         # Check if current user can update this user's level
-        if not is_supper_admin and user.level.level_order >= current_user.level.level_order:
+        if not is_supper_admin and _level_order_of(user) >= _level_order_of(current_user):
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.FORBIDDEN,
                 message="Không thể cập nhật người dùng có level cao hơn hoặc bằng level của bạn"
             )
-        if not is_supper_admin and user.role.role_order >= current_user.role.role_order:
+        if not is_supper_admin and _role_order_of(user) >= _role_order_of(current_user):
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.FORBIDDEN,
@@ -880,7 +965,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
             if not stmt_result:
                 return api_response(ResponseStatus.ERROR, ResponseStatusCode.NOT_FOUND, "Vai trò không tồn tại hoặc đã bị khóa")
             else:
-                if not is_supper_admin and current_user.role.role_order <= stmt_result.role_order:
+                if not is_supper_admin and _role_order_of(current_user) <= (stmt_result.role_order or 0):
                     return api_response(ResponseStatus.ERROR, ResponseStatusCode.FORBIDDEN, "Bạn chỉ có cập nhật người dùng có vai trò nhỏ hơn vai trò của bạn")
             
         # Check if new level is valid
@@ -893,6 +978,13 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     status=ResponseStatus.ERROR,
                     status_code=ResponseStatusCode.NOT_FOUND,
                     message="Level không tồn tại"
+                )
+            # Chống leo thang: không được gán level ngang/cao hơn level của mình
+            if not is_supper_admin and new_level.level_order >= _level_order_of(current_user):
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                    message="Bạn chỉ có thể gán level nhỏ hơn level của bạn"
                 )
             
         # Xác định tenant_id cho user sau khi update
@@ -931,6 +1023,9 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
         # Lưu ý: nếu client gửi field = null, mặc định ta **không** coi đó là yêu cầu "clear"
         # để tránh vô tình xóa role_id/level_id/... khi frontend gửi null.
         update_data = user_data.model_dump(exclude_unset=True, exclude_none=True)
+
+        if not is_supper_admin:
+            update_data.pop("is_platform_admin", None)
         
         # Flag to check if password is being changed
         password_changed = False
@@ -1152,19 +1247,14 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
             except Exception as e:
                 print(f"Failed to send password change notification: {str(e)}")
 
-        # Create response data
-        user_response = {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "fullname": user.fullname,
-            "role_id": user.role_id,
-            "level_id": user.level_id,
-            "is_active": user.is_active,
-            "tenant_id": user.tenant_id,
-            "meta_data": user.meta_data,
-            "messaging_synced": user_chatwoot_map is not None,
-        }
+        tenant = await db.get(Tenant, user.tenant_id) if user.tenant_id else None
+        user_response = _serialize_user(
+            user,
+            tenant=tenant,
+            viewer_is_platform_admin=is_supper_admin,
+            messaging_synced=user_chatwoot_map is not None,
+            include_webcall=True,
+        )
 
         return api_response(
             status=ResponseStatus.SUCCESS,
@@ -1191,7 +1281,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
 async def soft_delete_user(user_id: UUID, db: AsyncSession, current_user: User):
     try:
         stmt = None
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
          # Kiểm tra user tồn tại
         if is_super_admin:
             stmt = select(User).where(User.id == user_id)
@@ -1214,14 +1304,14 @@ async def soft_delete_user(user_id: UUID, db: AsyncSession, current_user: User):
                         message="Bạn chỉ có thể xóa người dùng trong tenant của mình"
                     )
         # Chỉ cho phép xóa nếu là admin hoặc target user có level thấp hơn
-        if not is_super_admin  and user.level.level_order >= current_user.level.level_order:
+        if not is_super_admin  and _level_order_of(user) >= _level_order_of(current_user):
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.FORBIDDEN,
                 message="Không thể xóa người dùng có level cao hơn hoặc bằng level của bạn"
             )
         
-        if not is_super_admin and user.role.role_order >= current_user.role.role_order:
+        if not is_super_admin and _role_order_of(user) >= _role_order_of(current_user):
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.FORBIDDEN,
@@ -1299,7 +1389,7 @@ async def soft_delete_user(user_id: UUID, db: AsyncSession, current_user: User):
 
 async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_user: User):
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         stmt = select(User).where(User.id == user_id)
         result = await db.execute(stmt)
         user = result.scalar_one_or_none()

@@ -11,7 +11,7 @@ from sqlalchemy import select, func,  or_
 from uuid import UUID
 from sqlalchemy.future import select
 from fastapi import Request
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime, timezone
 from typing import Any
@@ -56,12 +56,12 @@ def _tenant_chatwoot_account_payload(tenant: Tenant) -> tuple[dict[str, Any], di
 
 async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id: UUID | None, agent_id: UUID | None, is_active: int | None, graph_activated: int | None, page: int, page_size: int, search: str | None, db: AsyncSession):
     try:
-        if not (await isCheckMaxLevel(current_user, db)):
+        if not (await is_platform_admin(current_user, db)):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới có thể truy cập tài nguyên này"
-        )
+                "Chỉ platform admin mới có thể truy cập tài nguyên này",
+            )
 
         if id:
             query_tenant_raw = select(Tenant).where(Tenant.id == id)
@@ -141,11 +141,11 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
 
 async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: AsyncSession):
     try:
-        if not (await isCheckMaxLevel(current_user, db)):
+        if not (await is_platform_admin(current_user, db)):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới có thể truy cập tài nguyên này"
+                "Chỉ platform admin mới có thể truy cập tài nguyên này",
             )
         # Kiểm tra tên tenant đã tồn tại (không phân biệt hoa thường)
         query_tenant = select(Tenant).where(
@@ -285,11 +285,11 @@ async def updateTenant(
 ):
     try:
         # 1. Kiểm tra quyền
-        if not (await isCheckMaxLevel(current_user, db)):
+        if not (await is_platform_admin(current_user, db)):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới có thể truy cập tài nguyên này"
+                "Chỉ platform admin mới có thể truy cập tài nguyên này",
             )
         
         # 2. Kiểm tra trùng tên tenant (trừ chính tenant đang cập nhật)
@@ -419,12 +419,12 @@ async def updateTenant(
 
 async def deleteTenant(tenant_id: UUID, current_user: User, request, db: AsyncSession):
     try:
-        if not (await isCheckMaxLevel(current_user, db)):
+        if not (await is_platform_admin(current_user, db)):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới có thể truy cập tài nguyên này"
-        )
+                "Chỉ platform admin mới có thể truy cập tài nguyên này",
+            )
         if tenant_id is None:
             return api_response(
                 ResponseStatus.INFO, 
