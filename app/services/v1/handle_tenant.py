@@ -56,14 +56,16 @@ def _tenant_chatwoot_account_payload(tenant: Tenant) -> tuple[dict[str, Any], di
 
 async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id: UUID | None, agent_id: UUID | None, is_active: int | None, graph_activated: int | None, page: int, page_size: int, search: str | None, db: AsyncSession):
     try:
-        if not (await is_platform_admin(current_user, db)):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ platform admin mới có thể truy cập tài nguyên này",
-            )
+        is_super_admin = await is_platform_admin(current_user, db)
 
         if id:
+            if not is_super_admin and id != current_user.tenant_id:
+                return api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.FORBIDDEN,
+                    "Bạn chỉ có thể xem tenant của mình",
+                )
+
             query_tenant_raw = select(Tenant).where(Tenant.id == id)
             query_tenant_execute = await db.execute(query_tenant_raw)
             result_tenant = query_tenant_execute.scalar_one_or_none()
@@ -79,6 +81,14 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
             )
         else:
             query = select(Tenant)
+            if not is_super_admin:
+                if current_user.tenant_id is None:
+                    return api_response(
+                        ResponseStatus.ERROR,
+                        ResponseStatusCode.FORBIDDEN,
+                        "Tài khoản chưa thuộc tenant nào",
+                    )
+                query = query.where(Tenant.id == current_user.tenant_id)
             if graph_id:
                 query = query.where(Tenant.graph_id == graph_id)
             if agent_id:

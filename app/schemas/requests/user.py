@@ -97,6 +97,7 @@ class ResponseUser(BaseModel):
     role_id: Optional[UUID] | None = None
     level_id: Optional[UUID] | None = None
     tenant_id: Optional[UUID] | None = None
+    tenant_name: str | None = None
     is_platform_admin: bool = False
     role: str | None = None
     level: str | None = None

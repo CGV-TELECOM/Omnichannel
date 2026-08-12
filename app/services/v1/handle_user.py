@@ -86,6 +86,18 @@ def _webphone_response_dict(user: User) -> dict[str, Any]:
     }
 
 
+# Keys nội bộ sync messaging — không trả cho FE
+_META_DATA_HIDDEN_KEYS = frozenset({"chatwoot_agent"})
+
+
+def _public_meta_data(meta: Any) -> dict[str, Any] | None:
+    """Loại bỏ keys nội bộ (chatwoot sync) khỏi meta_data trả về."""
+    if not isinstance(meta, dict):
+        return None
+    filtered = {k: v for k, v in meta.items() if k not in _META_DATA_HIDDEN_KEYS}
+    return filtered or None
+
+
 def _serialize_user(
     user: User,
     *,
@@ -107,10 +119,11 @@ def _serialize_user(
         "role_id": user.role_id,
         "level_id": user.level_id,
         "tenant_id": user.tenant_id,
+        "tenant_name": tenant.name if tenant else None,
         "role": user.role.name if user.role else None,
         "level": user.level.name if user.level else None,
         "order_level": user.level.level_order if user.level else None,
-        "meta_data": user.meta_data,
+        "meta_data": _public_meta_data(user.meta_data),
         "webphone": _webphone_response_dict(user),
     }
     if viewer_is_platform_admin:
@@ -557,14 +570,22 @@ async def get_all_users(
             except SQLAlchemyError as e:
                 print(f"Error querying batch user permissions: {str(e)}")
 
+        tenant_ids = {user.tenant_id for user in users if user.tenant_id}
+        tenant_map: dict[UUID, Tenant] = {}
+        if tenant_ids:
+            tenant_result = await db.execute(select(Tenant).where(Tenant.id.in_(tenant_ids)))
+            tenant_map = {t.id: t for t in tenant_result.scalars().all()}
+
         # Tạo danh sách dữ liệu trả về
         viewer_platform = await is_platform_admin(current_user, db)
         user_data = []
         for user in users:
             permissions = permissions_map.get(user.id, [])
+            tenant = tenant_map.get(user.tenant_id) if user.tenant_id else None
             user_data.append(
                 _serialize_user(
                     user,
+                    tenant=tenant,
                     permissions=permissions,
                     viewer_is_platform_admin=viewer_platform,
                     include_webcall=True,
