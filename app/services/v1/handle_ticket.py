@@ -11,7 +11,7 @@ from app.schemas.requests.ticket import (
     TicketStatusUpdate,
     TicketResponse
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 from uuid import UUID
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
@@ -112,7 +112,7 @@ async def get_tickets(
     """
     try:
         # Check permissions
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Build base query với relationships
         query = select(Ticket).options(
@@ -278,7 +278,7 @@ async def get_tickets(
 async def get_ticket_by_id(ticket_id: UUID, db: AsyncSession, current_user: User):
     """Lấy thông tin ticket theo ID"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         query = select(Ticket).options(
             selectinload(Ticket.template),
@@ -361,7 +361,7 @@ async def get_ticket_by_id(ticket_id: UUID, db: AsyncSession, current_user: User
 async def get_ticket_by_code(code: str, db: AsyncSession, current_user: User):
     """Lấy thông tin ticket theo code"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         query = select(Ticket).options(
             selectinload(Ticket.template),
@@ -444,7 +444,7 @@ async def get_ticket_by_code(code: str, db: AsyncSession, current_user: User):
 async def create_ticket(ticket_data: TicketCreate, db: AsyncSession, current_user: User):
     """Tạo ticket mới"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Get user role name for logging
         actor_type = await get_user_role_name(current_user, db)
@@ -602,7 +602,7 @@ async def create_ticket(ticket_data: TicketCreate, db: AsyncSession, current_use
 async def update_ticket(ticket_id: UUID, ticket_data: TicketUpdate, db: AsyncSession, current_user: User):
     """Cập nhật thông tin ticket"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         actor_type = await get_user_role_name(current_user, db)
         
         # Get ticket
@@ -792,7 +792,7 @@ async def update_ticket(ticket_id: UUID, ticket_data: TicketUpdate, db: AsyncSes
 async def delete_ticket(ticket_id: UUID, db: AsyncSession, current_user: User):
     """Xóa ticket (hard delete vì có cascade)"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Get ticket
         query = select(Ticket).where(Ticket.id == ticket_id)
@@ -843,7 +843,7 @@ async def delete_ticket(ticket_id: UUID, db: AsyncSession, current_user: User):
 async def assign_ticket(ticket_id: UUID, assign_data: TicketAssign, db: AsyncSession, current_user: User):
     """Gán ticket cho user"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         actor_type = await get_user_role_name(current_user, db)
         
         # Get ticket
@@ -930,7 +930,7 @@ async def assign_ticket(ticket_id: UUID, assign_data: TicketAssign, db: AsyncSes
 async def update_ticket_status(ticket_id: UUID, status_data: TicketStatusUpdate, db: AsyncSession, current_user: User):
     """Cập nhật trạng thái ticket"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         actor_type = await get_user_role_name(current_user, db)
         
         # Get ticket

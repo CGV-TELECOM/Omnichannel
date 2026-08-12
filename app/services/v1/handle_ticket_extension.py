@@ -8,7 +8,7 @@ from app.schemas.requests.ticket_extension import (
     TicketExtensionUpdate,
     TicketExtensionResponse
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 from uuid import UUID
 from typing import Optional, Dict, Any
 import json
@@ -21,7 +21,7 @@ async def get_ticket_extension(ticket_id: UUID, db: AsyncSession, current_user: 
     Lấy extension data của một ticket
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Validate ticket exists and user has access
         ticket_query = select(Ticket).where(Ticket.id == ticket_id)
@@ -88,7 +88,7 @@ async def upsert_ticket_extension(extension_data: TicketExtensionCreate, db: Asy
     Tạo hoặc cập nhật extension data cho ticket (Upsert)
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Validate ticket exists and user has access
         ticket_query = select(Ticket).where(Ticket.id == extension_data.ticket_id)
@@ -179,7 +179,7 @@ async def update_ticket_extension(ticket_id: UUID, extension_data: TicketExtensi
     Cập nhật extension data cho ticket (Merge với data hiện tại)
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Validate ticket exists and user has access
         ticket_query = select(Ticket).where(Ticket.id == ticket_id)
@@ -255,7 +255,7 @@ async def delete_ticket_extension(ticket_id: UUID, db: AsyncSession, current_use
     Xóa extension data của ticket
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Validate ticket exists and user has access
         ticket_query = select(Ticket).where(Ticket.id == ticket_id)

@@ -32,7 +32,7 @@ from app.schemas.responses.api_response_rule import (
     api_response,
 )
 from app.core.config.app_config import settings
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ async def _require_tenant_access(
     - Admin (max level) truy cập mọi tenant
     - User thường chỉ truy cập đúng tenant của họ
     """
-    if await isCheckMaxLevel(current_user, db):
+    if await is_platform_admin(current_user, db):
         return None
     if _is_tenant_member(current_user, tenant_id):
         return None

@@ -5,13 +5,13 @@ from sqlalchemy import select, func, or_, delete, and_, exists, update
 from sqlalchemy.sql import over
 from sqlalchemy.exc import SQLAlchemyError
 from app.schemas.requests.department import DepartmentCreate, DepartmentUpdate
-from app.utils.helpers import isCheckMaxLevel, isCheckMaxLevelTenant
+from app.utils.helpers import is_platform_admin, isCheckMaxLevelTenant
 from uuid import UUID
 
 async def get_department_by_id(department_id: UUID, db: AsyncSession, current_user: User):
     try:
         # Lấy người dùng có quyền cao nhất
-        user_max_level = await isCheckMaxLevel(current_user, db)
+        user_max_level = await is_platform_admin(current_user, db)
 
         # Lấy thông tin department
         stmt = select(Department).where(
@@ -83,7 +83,7 @@ async def get_departments(
             return await get_department_by_id(id, db, current_user)
 
         # Kiểm tra quyền
-        has_max_level = await isCheckMaxLevel(current_user, db)
+        has_max_level = await is_platform_admin(current_user, db)
 
         # Nếu không phải max level → kiểm tra tenant
         if not has_max_level:
@@ -185,7 +185,7 @@ async def get_departments(
 
 async def create_department(department_data: DepartmentCreate, db: AsyncSession, current_user: User):
     try:
-        user_max_level = await isCheckMaxLevel(current_user, db)
+        user_max_level = await is_platform_admin(current_user, db)
 
         # Xác định tenant_id
         if user_max_level:
@@ -286,7 +286,7 @@ async def create_department(department_data: DepartmentCreate, db: AsyncSession,
 
 async def update_department(department_id: UUID, department_data: DepartmentUpdate, db: AsyncSession, current_user: User):
     try:
-        user_max_level = await isCheckMaxLevel(current_user, db)
+        user_max_level = await is_platform_admin(current_user, db)
 
         # Xác định tenant_id
         if user_max_level:
@@ -394,7 +394,7 @@ async def update_department(department_id: UUID, department_data: DepartmentUpda
 async def delete_department(department_id: UUID, db: AsyncSession, current_user: User):
     try:
         # Check quyền và tồn tại trong 1 query
-        has_max_level = await isCheckMaxLevel(current_user, db)
+        has_max_level = await is_platform_admin(current_user, db)
 
         department = await db.scalar(
             select(Department).where(
@@ -462,7 +462,7 @@ async def delete_department(department_id: UUID, db: AsyncSession, current_user:
 async def get_department_detail(department_id: UUID, db: AsyncSession, current_user: User):
     try:
         # Lấy thông tin department
-        user_level_max = await isCheckMaxLevel(current_user, db)
+        user_level_max = await is_platform_admin(current_user, db)
 
         stmt = select(Department).where(Department.id == department_id)
 

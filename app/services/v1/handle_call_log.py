@@ -9,7 +9,7 @@ from app.schemas.requests.call_log import (
     CallLogResponse,
     CallLogEventResponse,
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 from uuid import UUID
 from typing import Optional, Any, Tuple
 from datetime import datetime, timezone
@@ -120,7 +120,7 @@ async def create_call_log(db: AsyncSession, current_user: User, data: CallLogCre
             )
 
         # Xác định tenant_id
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         tenant_id = data.tenant_id if (is_super_admin and data.tenant_id) else current_user.tenant_id
         
         if not tenant_id:
@@ -235,7 +235,7 @@ async def update_call_log(sip_call_id: UUID, db: AsyncSession, current_user: Use
             )
 
         # Kiểm tra quyền hạn (phải thuộc cùng tenant hoặc là Super Admin)
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         if not is_super_admin and call_log.tenant_id != current_user.tenant_id:
             return api_response(
                 status=ResponseStatus.ERROR,
@@ -314,7 +314,7 @@ async def get_call_log_by_sip_call_id(sip_call_id: UUID, db: AsyncSession, curre
             )
 
         # Kiểm tra quyền hạn
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         if not is_super_admin and call_log.tenant_id != current_user.tenant_id:
             return api_response(
                 status=ResponseStatus.ERROR,
@@ -352,7 +352,7 @@ async def get_call_logs(
     customer_id: Optional[UUID] = None
 ):
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         query = select(CallLog).options(
             selectinload(CallLog.tenant),
@@ -442,7 +442,7 @@ async def _get_tenant_scoped_call_log(
             data=None,
         )
 
-    is_super_admin = await isCheckMaxLevel(current_user, db)
+    is_super_admin = await is_platform_admin(current_user, db)
     if not is_super_admin and call_log.tenant_id != current_user.tenant_id:
         return None, api_response(
             status=ResponseStatus.ERROR,

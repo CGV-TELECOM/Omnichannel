@@ -8,7 +8,7 @@ from app.schemas.requests.ticket_context import (
     TicketContextUpdate,
     TicketContextResponse
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 from uuid import UUID
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -36,7 +36,7 @@ async def get_ticket_contexts(
     """
     try:
         # Check permissions
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Build base query
         query = select(TicketContext)
@@ -156,7 +156,7 @@ async def get_ticket_context_by_id(context_id: UUID, db: AsyncSession, current_u
     Lấy thông tin chi tiết một ticket context theo ID
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         query = select(TicketContext).where(TicketContext.id == context_id)
         
@@ -213,7 +213,7 @@ async def create_ticket_context(context_data: TicketContextCreate, db: AsyncSess
     Tạo ticket context mới
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Validate ticket exists and user has access
         ticket_query = select(Ticket).where(Ticket.id == context_data.ticket_id)
@@ -305,7 +305,7 @@ async def update_ticket_context(context_id: UUID, context_data: TicketContextUpd
     Cập nhật ticket context
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Check if context exists and user has permission
         query = select(TicketContext).where(TicketContext.id == context_id)
@@ -377,7 +377,7 @@ async def delete_ticket_context(context_id: UUID, db: AsyncSession, current_user
     Xóa ticket context (hard delete)
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Check if context exists and user has permission
         query = select(TicketContext).where(TicketContext.id == context_id)

@@ -20,7 +20,7 @@ from app.schemas.requests.customer import (
     CustomerUpdateRequest,
 )
 from app.schemas.requests.customer_tag import CustomerTagUpdateRequest
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 
 
 async def _get_tenant_if_required(
@@ -31,7 +31,7 @@ async def _get_tenant_if_required(
     Super admin thì không bị ràng buộc bởi tenant hiện tại.
     """
 
-    is_super_admin = await isCheckMaxLevel(current_user, db)
+    is_super_admin = await is_platform_admin(current_user, db)
     if is_super_admin:
         return None
 
@@ -57,7 +57,7 @@ async def _load_customer_with_tenant_guard(
     - User thường: chỉ truy cập được customer cùng tenant
     """
 
-    is_super_admin = await isCheckMaxLevel(current_user, db)
+    is_super_admin = await is_platform_admin(current_user, db)
     query = select(Customer).options(selectinload(Customer.tags)).where(Customer.id == customer_id)
 
     if not is_super_admin:
@@ -86,7 +86,7 @@ async def _apply_tags_to_customer(
         customer.tags = []
         return
 
-    is_super_admin = await isCheckMaxLevel(current_user, db)
+    is_super_admin = await is_platform_admin(current_user, db)
 
     tags_query = select(Tag).where(
         Tag.id.in_(tag_ids),
@@ -125,7 +125,7 @@ async def get_customers(
         if id:
             return await get_customer_by_id(id, db, current_user)
 
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         # Tính level_order hiện tại để chặn view lên level bằng/ cao hơn
         current_level_order: int = 0
@@ -270,7 +270,7 @@ async def get_customer_by_id(customer_id: UUID, db: AsyncSession, current_user: 
             )
 
         # Không cho phép xem khách hàng được tạo bởi user có level >= mình (trừ super admin)
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         if not is_super_admin and current_user.level_id is not None:
             level_stmt = select(Levels.level_order).where(Levels.id == current_user.level_id)
             level_res = await db.execute(level_stmt)
@@ -346,7 +346,7 @@ async def get_customer_tags(customer_id: UUID, db: AsyncSession, current_user: U
                 message="Khách hàng không tồn tại hoặc bạn không có quyền truy cập",
             )
 
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         if not is_super_admin and current_user.level_id is not None:
             level_stmt = select(Levels.level_order).where(Levels.id == current_user.level_id)
             level_res = await db.execute(level_stmt)
@@ -415,7 +415,7 @@ async def create_customer(
     - Hỗ trợ gán tags (type=CUSTOMER).
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         tenant_id: Optional[UUID]
         if is_super_admin:
@@ -563,7 +563,7 @@ async def update_customer(
                 message="Khách hàng không tồn tại hoặc bạn không có quyền cập nhật",
             )
 
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         # Không cho phép sửa khách hàng được tạo bởi user có level >= mình (trừ super admin)
         if not is_super_admin and current_user.level_id is not None:
@@ -730,7 +730,7 @@ async def soft_delete_customer(
     """
     try:
         # Chỉ cho phép super admin xóa customer, thống nhất với rule chặt chẽ của hệ thống
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         if not is_super_admin:
             return api_response(
                 status=ResponseStatus.ERROR,
@@ -828,7 +828,7 @@ async def add_tags_to_customer(
                 message="Khách hàng không tồn tại hoặc bạn không có quyền cập nhật",
             )
 
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         # Không cho phép chỉnh sửa khách hàng được tạo bởi user có level >= mình
         if not is_super_admin and current_user.level_id is not None:
@@ -923,7 +923,7 @@ async def remove_tags_from_customer(
                 message="Khách hàng không tồn tại hoặc bạn không có quyền cập nhật",
             )
 
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         # Không cho phép chỉnh sửa khách hàng được tạo bởi user có level >= mình
         if not is_super_admin and current_user.level_id is not None:

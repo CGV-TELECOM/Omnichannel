@@ -9,7 +9,7 @@ from app.schemas.requests.ticket_event import (
     TicketEventResponse,
     TicketEventFilter
 )
-from app.utils.helpers import isCheckMaxLevel, isCheckMaxLevelTenant
+from app.utils.helpers import is_platform_admin, isCheckMaxLevelTenant
 from uuid import UUID
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -48,7 +48,7 @@ async def get_ticket_events(
     """
     try:
         # Check permissions
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Build base query
         query = select(TicketEvent)
@@ -190,7 +190,7 @@ async def get_ticket_event_by_id(event_id: UUID, db: AsyncSession, current_user:
     Lấy thông tin chi tiết một ticket event theo ID
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         query = select(TicketEvent).where(TicketEvent.id == event_id)
         
@@ -247,7 +247,7 @@ async def create_ticket_event(event_data: TicketEventCreate, db: AsyncSession, c
     Tạo ticket event mới
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Validate ticket exists and user has access
         ticket_query = select(Ticket).where(Ticket.id == event_data.ticket_id)
@@ -347,7 +347,7 @@ async def update_ticket_event(event_id: UUID, event_data: TicketEventUpdate, db:
     Cập nhật ticket event
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Check if event exists and user has permission
         query = select(TicketEvent).where(TicketEvent.id == event_id)
@@ -420,7 +420,7 @@ async def delete_ticket_event(event_id: UUID, db: AsyncSession, current_user: Us
     Xóa ticket event (hard delete)
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Check if event exists and user has permission
         query = select(TicketEvent).where(TicketEvent.id == event_id)

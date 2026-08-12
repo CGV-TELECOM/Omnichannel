@@ -10,7 +10,7 @@ from app.schemas.responses.api_response_rule import (
     ResponseStatus,
     ResponseStatusCode,
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 
 router = APIRouter(
     prefix="",
@@ -28,7 +28,7 @@ async def test_email(
     Endpoint test gửi email — chỉ Super Admin.
     Không còn public.
     """
-    if not await isCheckMaxLevel(current_user, db):
+    if not await is_platform_admin(current_user, db):
         return api_response(
             status=ResponseStatus.ERROR,
             status_code=ResponseStatusCode.FORBIDDEN,

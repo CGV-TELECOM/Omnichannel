@@ -4,7 +4,7 @@ from app.schemas.responses.api_response_rule import api_response, ResponseStatus
 from app.db.models import User, Group, GroupUser
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 
 
 async def _resolve_scoped_user_group(
@@ -18,7 +18,7 @@ async def _resolve_scoped_user_group(
     - User thường: user & group phải thuộc tenant của mình.
     - Super admin: user & group phải cùng một tenant với nhau.
     """
-    is_super_admin = await isCheckMaxLevel(current_user, db)
+    is_super_admin = await is_platform_admin(current_user, db)
 
     user = await db.scalar(select(User).where(User.id == user_id))
     if not user:

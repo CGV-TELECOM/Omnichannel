@@ -402,17 +402,22 @@ class NotificationService:
             return 0
     
     @staticmethod
-    async def mark_notification_as_read(notification_id: UUID, db: AsyncSession):
+    async def mark_notification_as_read(notification_id: UUID, user_id: UUID, db: AsyncSession):
         """Mark a notification as read"""
         try:
             stmt = (
                 update(Notification)
-                .where(Notification.id == notification_id)
+                .where(
+                    and_(
+                        Notification.id == notification_id,
+                        Notification.user_id == user_id,
+                    )
+                )
                 .values(is_read=1, read_at=datetime.now(timezone.utc))
             )
-            await db.execute(stmt)
+            result = await db.execute(stmt)
             await db.commit()
-            return True
+            return (result.rowcount or 0) > 0
         except Exception as e:
             logger.error(f"Error marking notification as read: {str(e)}")
             return False

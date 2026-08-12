@@ -4,7 +4,7 @@ from app.db.models import Group, User, Department, GroupUser, Levels, Tenant, Ro
 from sqlalchemy import select, func, or_, and_, cast, Integer, exists, delete, update, literal
 from sqlalchemy.exc import SQLAlchemyError
 from app.schemas.requests.group import GroupCreate, GroupUpdate
-from app.utils.helpers import isCheckMaxLevel, isCheckMaxLevelTenant
+from app.utils.helpers import is_platform_admin, isCheckMaxLevelTenant
 from collections import defaultdict
 from uuid import UUID
 
@@ -24,7 +24,7 @@ async def get_groups(
             return await get_group_by_id(id, db, current_user)
 
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Check tenant active
         tenant = await db.scalar(
@@ -148,7 +148,7 @@ async def get_groups(
 async def check_group_access(db: AsyncSession, current_user: User, group_id: UUID) -> bool:
     try:
         # Lấy quyền super admin / tenant admin
-        user_max_level = await isCheckMaxLevel(current_user, db)
+        user_max_level = await is_platform_admin(current_user, db)
         tenant_max_level = await isCheckMaxLevelTenant(current_user, db)
 
         # Truy vấn duy nhất
@@ -260,7 +260,7 @@ async def get_group_by_id(group_id: UUID, db: AsyncSession, current_user: User):
     
 async def create_group(group_data: GroupCreate, db: AsyncSession, current_user: User):
     try:
-        user_max_level = await isCheckMaxLevel(current_user, db)
+        user_max_level = await is_platform_admin(current_user, db)
 
         # Xác định tenant_id hợp lệ
         tenant_id = (group_data.tenant_id if user_max_level else None) or current_user.tenant_id
@@ -368,7 +368,7 @@ async def update_group(
     current_user: User
 ):
     try:
-        user_max_level = await isCheckMaxLevel(current_user, db)
+        user_max_level = await is_platform_admin(current_user, db)
 
         # Kiểm tra quyền truy cập nhóm
         if not await check_group_access(db, current_user, group_id):
@@ -467,7 +467,7 @@ async def update_group(
 
 async def delete_group(group_id: UUID, db: AsyncSession, current_user: User):
     try:
-        user_max_level = await isCheckMaxLevel(current_user, db)
+        user_max_level = await is_platform_admin(current_user, db)
         # Kiểm tra quyền truy cập
         if not await check_group_access(db, current_user, group_id):
             return api_response(

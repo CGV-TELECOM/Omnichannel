@@ -3,7 +3,7 @@ from app.schemas.responses.api_response_rule import api_response
 from app.schemas.responses.api_response_rule import ResponseStatus, ResponseStatusCode
 from app.db.models import Log, User
 from sqlalchemy import select, func, and_, or_
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 from uuid import UUID
 from typing import Optional
 
@@ -21,7 +21,7 @@ async def get_logs(
 ):
     try:
         offset = (page - 1) * page_size
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         base_query = select(Log)
         filters = []

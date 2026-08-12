@@ -5,6 +5,13 @@ from sqlalchemy import  func
 from typing import Optional, cast
 
 
+async def get_global_max_level_order(db: AsyncSession) -> int:
+    """level_order cao nhất trong catalog (hiện tại = Admin/CGV)."""
+    stmt = select(func.max(Levels.level_order)).select_from(Levels)
+    result = await db.execute(stmt)
+    return cast(int, result.scalar_one_or_none() or 0)
+
+
 async def is_platform_admin(current_user, db: AsyncSession | None = None) -> bool:
     """
     Platform admin (CGV ops): duy nhất nhóm này được thao tác cross-tenant.

@@ -17,7 +17,7 @@ from app.core.security.password_utils import hash_password
 from sqlalchemy import update
 from typing import Any, Optional, cast
 from app.schemas.requests.user import CreateUserRequest, UpdateUserRequest
-from app.utils.helpers import is_platform_admin
+from app.utils.helpers import get_global_max_level_order, is_platform_admin
 from uuid import UUID
 from datetime import datetime, timezone
 from app.integrations.chatwoot import client as chatwoot_client
@@ -771,6 +771,16 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
                     status_code=ResponseStatusCode.FORBIDDEN,
                     message="Bạn chỉ có thể tạo người dùng có level nhỏ hơn level của bạn"
                 )
+            max_level_order = await get_global_max_level_order(db)
+            will_be_platform_admin = bool(
+                is_supper_admin and user_data.is_platform_admin is True
+            )
+            if new_level.level_order >= max_level_order and not will_be_platform_admin:
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                    message="Level Admin chỉ dành cho tài khoản platform admin (CGV)",
+                )
         
         # Create new user
         webphone_kwargs = _webphone_kwargs_from_request(user_data, for_create=True)
@@ -957,6 +967,15 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     status_code=ResponseStatusCode.BAD_REQUEST,
                     message="Tenant không tồn tại, hoặc không hợp lệ. Hãy kiểm tra lại"
                 )
+            if (
+                not is_supper_admin
+                and user_data.tenant_id != current_user.tenant_id
+            ):
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                    message="Bạn chỉ có thể cập nhật người dùng trong tenant của mình",
+                )
                 
         # Kiểm tra role_id nếu có
         if user_data.role_id:
@@ -985,6 +1004,21 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     status=ResponseStatus.ERROR,
                     status_code=ResponseStatusCode.FORBIDDEN,
                     message="Bạn chỉ có thể gán level nhỏ hơn level của bạn"
+                )
+            max_level_order = await get_global_max_level_order(db)
+            if user_data.is_platform_admin is not None:
+                prospective_platform_admin = (
+                    bool(user_data.is_platform_admin)
+                    if is_supper_admin
+                    else bool(user.is_platform_admin)
+                )
+            else:
+                prospective_platform_admin = bool(user.is_platform_admin)
+            if new_level.level_order >= max_level_order and not prospective_platform_admin:
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                    message="Level Admin chỉ dành cho tài khoản platform admin (CGV)",
                 )
             
         # Xác định tenant_id cho user sau khi update

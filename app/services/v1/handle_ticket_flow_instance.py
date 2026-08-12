@@ -5,7 +5,7 @@ from sqlalchemy import select, func, or_, and_
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import selectinload
 from app.schemas.requests.ticket_flow_instance import TicketFlowInstanceCreate, TicketFlowInstanceUpdate
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 from uuid import UUID
 from datetime import datetime, timezone
 from app.db.models import FlowInstanceStatus
@@ -33,7 +33,7 @@ async def get_ticket_flow_instances(
             return await get_ticket_flow_instance_by_id(id, db, current_user)
 
         # Check quyền super admin (level cao nhất)
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Check tenant active
         if not max_level_user:
@@ -179,7 +179,7 @@ async def get_ticket_flow_instance_by_id(instance_id: UUID, db: AsyncSession, cu
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Query instance với relationships
         query = select(TicketFlowInstance).where(TicketFlowInstance.id == instance_id)
@@ -270,7 +270,7 @@ async def create_ticket_flow_instance(instance_data: TicketFlowInstanceCreate, d
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Xác định tenant_id
         if max_level_user and instance_data.tenant_id:
@@ -417,7 +417,7 @@ async def update_ticket_flow_instance(instance_id: UUID, instance_data: TicketFl
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Query instance
         query = select(TicketFlowInstance).where(TicketFlowInstance.id == instance_id)
@@ -518,7 +518,7 @@ async def delete_ticket_flow_instance(instance_id: UUID, db: AsyncSession, curre
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Query instance
         query = select(TicketFlowInstance).where(TicketFlowInstance.id == instance_id)

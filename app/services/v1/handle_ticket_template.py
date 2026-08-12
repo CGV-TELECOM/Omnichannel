@@ -8,7 +8,7 @@ from app.schemas.requests.ticket_template import (
     TicketTemplateUpdate,
     TicketTemplateResponse
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 from uuid import UUID
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
@@ -35,7 +35,7 @@ async def get_ticket_templates(
     """
     try:
         # Check permissions
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Build base query
         query = select(TicketTemplate)
@@ -157,7 +157,7 @@ async def get_ticket_template_by_id(template_id: UUID, db: AsyncSession, current
     Lấy thông tin chi tiết một ticket template theo ID
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         query = select(TicketTemplate).where(TicketTemplate.id == template_id)
         
@@ -216,7 +216,7 @@ async def create_ticket_template(template_data: TicketTemplateCreate, db: AsyncS
     Tạo ticket template mới
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Set tenant_id
         if is_super_admin and template_data.tenant_id:
@@ -296,7 +296,7 @@ async def update_ticket_template(template_id: UUID, template_data: TicketTemplat
     Cập nhật ticket template
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Check if template exists and user has permission
         query = select(TicketTemplate).where(TicketTemplate.id == template_id)
@@ -373,7 +373,7 @@ async def delete_ticket_template(template_id: UUID, db: AsyncSession, current_us
     Xóa ticket template (soft delete bằng cách set is_active = False)
     """
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
         
         # Check if template exists and user has permission
         query = select(TicketTemplate).where(TicketTemplate.id == template_id)

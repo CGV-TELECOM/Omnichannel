@@ -15,7 +15,7 @@ from app.schemas.responses.api_response_rule import (
     ResponseStatusCode,
     api_response,
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 
 from app.services.v1.handle_chatwoot._shared import (
     _forward_all_query_pairs,
@@ -36,7 +36,7 @@ async def list_agents(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -116,7 +116,7 @@ async def create_agent(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -191,7 +191,7 @@ async def update_agent(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -262,7 +262,7 @@ async def delete_agent(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,

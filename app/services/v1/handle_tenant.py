@@ -293,19 +293,20 @@ async def updateTenant(
             )
         
         # 2. Kiểm tra trùng tên tenant (trừ chính tenant đang cập nhật)
-        tenant_query = await db.execute(
-            select(Tenant).where(
-                func.upper(Tenant.name) == tenant_data.name.upper(),
-                Tenant.id != tenant_id
+        if tenant_data.name is not None:
+            tenant_query = await db.execute(
+                select(Tenant).where(
+                    func.upper(Tenant.name) == tenant_data.name.upper(),
+                    Tenant.id != tenant_id
+                )
             )
-        )
-        existing_tenant = tenant_query.scalar_one_or_none()
-        if existing_tenant:
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.CONFLICT,
-                "Đã tồn tại tên tenant trong hệ thống"
-            )
+            existing_tenant = tenant_query.scalar_one_or_none()
+            if existing_tenant:
+                return api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.CONFLICT,
+                    "Đã tồn tại tên tenant trong hệ thống"
+                )
         
         # 3. Tìm tenant theo ID
         target_query = await db.execute(select(Tenant).where(Tenant.id == tenant_id))

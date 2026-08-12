@@ -36,11 +36,11 @@ async def test_create_customer_provided_info_success():
         level_id=uuid4(),
     )
     
-    # Mock isCheckMaxLevel to return False (non-admin)
+    # Mock is_platform_admin to return False (non-admin)
     with MagicMock() as mock_check_level:
         # Patch the helper function
         import app.services.v1.handle_customer_provided_info as handler
-        handler.isCheckMaxLevel = AsyncMock(return_value=False)
+        handler.is_platform_admin = AsyncMock(return_value=False)
         
         info_data = CustomerProvidedInfoCreate(
             name="Alice",
@@ -68,9 +68,9 @@ async def test_create_customer_provided_info_wrong_tenant():
         tenant_id=uuid4(),
     )
     
-    # Mock isCheckMaxLevel to return False
+    # Mock is_platform_admin to return False
     import app.services.v1.handle_customer_provided_info as handler
-    handler.isCheckMaxLevel = AsyncMock(return_value=False)
+    handler.is_platform_admin = AsyncMock(return_value=False)
     
     info_data = CustomerProvidedInfoCreate(
         name="Alice",
@@ -101,9 +101,9 @@ async def test_delete_customer_provided_info_success():
     
     db.scalar = AsyncMock(return_value=info)
     
-    # Mock isCheckMaxLevel to return False
+    # Mock is_platform_admin to return False
     import app.services.v1.handle_customer_provided_info as handler
-    handler.isCheckMaxLevel = AsyncMock(return_value=False)
+    handler.is_platform_admin = AsyncMock(return_value=False)
     
     response = await delete_customer_provided_info(info.id, db, current_user)
     

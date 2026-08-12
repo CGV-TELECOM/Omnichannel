@@ -9,12 +9,22 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.v1.handle_notification import notification_service, NotificationType
 from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
-from app.services.v1.handle_user import get_current_user
 from app.db.models import User
 from app.core.socket.manager import socket_manager
 from app.core.config.database import get_db
+from app.core.dependencies.dependencies import get_current_user_dependency
+from app.utils.helpers import is_platform_admin
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
+
+
+async def require_platform_admin(
+    current_user: User = Depends(get_current_user_dependency),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    if not await is_platform_admin(current_user, db):
+        raise HTTPException(status_code=403, detail="Platform admin only")
+    return current_user
 
 class SendNotificationRequest(BaseModel):
     """Request schema for sending notification"""
@@ -36,7 +46,7 @@ class BroadcastNotificationRequest(BaseModel):
 async def send_notification(
     request: SendNotificationRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_platform_admin)
 ):
     """
     Send notification to specific user or tenant with persistent storage
@@ -129,7 +139,7 @@ async def send_notification(
 @router.post("/broadcast")
 async def broadcast_notification(
     request: BroadcastNotificationRequest,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_platform_admin)
 ):
     """
     Broadcast notification to all connected users
@@ -161,7 +171,7 @@ async def broadcast_notification(
         )
 
 @router.get("/online-users")
-async def get_online_users(current_user: User = Depends(get_current_user)):
+async def get_online_users(current_user: User = Depends(require_platform_admin)):
     """
     Get list of online users
     Requires admin permission
@@ -190,7 +200,7 @@ async def get_online_users(current_user: User = Depends(get_current_user)):
 @router.get("/user/{user_id}/online")
 async def check_user_online(
     user_id: UUID,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_platform_admin)
 ):
     """
     Check if a specific user is online
@@ -216,7 +226,7 @@ async def check_user_online(
         )
 
 @router.get("/ws/status")
-async def websocket_status():
+async def websocket_status(current_user: User = Depends(require_platform_admin)):
     """
     Get WebSocket server status and statistics
     Public endpoint for health check
@@ -253,7 +263,7 @@ async def get_notification_history(
     page_size: int = 20,
     unread_only: bool = False,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_dependency)
 ):
     """
     Get notification history for current user
@@ -292,7 +302,7 @@ async def get_notification_history(
 async def mark_notification_as_read(
     notification_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_dependency)
 ):
     """
     Mark a notification as read
@@ -300,7 +310,11 @@ async def mark_notification_as_read(
     try:
         from app.services.v1.handle_notification import NotificationService
         
-        success = await NotificationService.mark_notification_as_read(notification_id, db)
+        success = await NotificationService.mark_notification_as_read(
+            notification_id,
+            current_user.id,
+            db,
+        )
         
         if success:
             return api_response(
@@ -311,8 +325,8 @@ async def mark_notification_as_read(
         else:
             return api_response(
                 status=ResponseStatus.ERROR,
-                status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
-                message="Failed to mark notification as read"
+                status_code=ResponseStatusCode.NOT_FOUND,
+                message="Notification not found"
             )
         
     except Exception as e:
@@ -325,7 +339,7 @@ async def mark_notification_as_read(
 @router.post("/read-all")
 async def mark_all_notifications_as_read(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user_dependency)
 ):
     """
     Mark all notifications as read for current user

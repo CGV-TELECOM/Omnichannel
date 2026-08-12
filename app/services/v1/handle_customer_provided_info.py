@@ -17,12 +17,12 @@ from app.schemas.requests.customer_provided_info import (
     CustomerProvidedInfoUpdate,
     CustomerProvidedInfoResponse,
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 
 
 async def _get_tenant_guard(db: AsyncSession, current_user: User) -> bool:
     """Check if tenant is active (only for non-superadmins)"""
-    is_super_admin = await isCheckMaxLevel(current_user, db)
+    is_super_admin = await is_platform_admin(current_user, db)
     if is_super_admin:
         return True
 
@@ -50,7 +50,7 @@ async def get_customer_provided_info(
 ):
     """Lấy danh sách hoặc chi tiết thông tin KH cung cấp"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         # Check tenant active
         if not is_super_admin:
@@ -156,7 +156,7 @@ async def create_customer_provided_info(
 ):
     """Tạo mới thông tin KH cung cấp"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         tenant_id: Optional[UUID]
         if is_super_admin:
@@ -228,7 +228,7 @@ async def update_customer_provided_info(
 ):
     """Cập nhật thông tin KH cung cấp"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         query = select(CustomerProvidedInfo).where(CustomerProvidedInfo.id == info_id)
         if not is_super_admin:
@@ -306,7 +306,7 @@ async def delete_customer_provided_info(
 ):
     """Xóa thông tin KH cung cấp"""
     try:
-        is_super_admin = await isCheckMaxLevel(current_user, db)
+        is_super_admin = await is_platform_admin(current_user, db)
 
         query = select(CustomerProvidedInfo).where(CustomerProvidedInfo.id == info_id)
         if not is_super_admin:

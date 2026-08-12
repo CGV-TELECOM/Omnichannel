@@ -19,7 +19,7 @@ from app.schemas.responses.api_response_rule import (
     ResponseStatusCode,
     api_response,
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 
 from app.services.v1.handle_chatwoot._shared import (
     _forward_all_query_pairs,
@@ -42,7 +42,7 @@ async def list_all_agent_bots(
 ):
     """GET /platform/api/v1/agent_bots — toàn bộ bot trên instance messaging (Platform API)."""
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -98,7 +98,7 @@ async def list_tenant_agent_bots(
 ):
     """Lọc bot thuộc đúng messaging account đã map với tenant."""
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -171,7 +171,7 @@ async def create_agent_bot(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -247,7 +247,7 @@ async def get_agent_bot(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -316,7 +316,7 @@ async def update_agent_bot(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -408,7 +408,7 @@ async def delete_agent_bot(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,

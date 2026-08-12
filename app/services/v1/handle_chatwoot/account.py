@@ -18,7 +18,7 @@ from app.schemas.responses.api_response_rule import (
     ResponseStatusCode,
     api_response,
 )
-from app.utils.helpers import isCheckMaxLevel
+from app.utils.helpers import is_platform_admin
 
 from app.services.v1.handle_chatwoot._shared import (
     _INTEGRATION_ACCOUNT_USER_ROLE,
@@ -43,7 +43,7 @@ async def provision_account(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -228,7 +228,7 @@ async def get_account(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -285,7 +285,7 @@ async def sync_integration_account_user(
 ):
     """Gắn lại user tích hợp vào account đã map (tenant cũ hoặc sau khi sửa .env)."""
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -348,7 +348,7 @@ async def update_account(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -435,7 +435,7 @@ async def delete_account(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -614,7 +614,7 @@ async def bulk_action_account(
     }
     """
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -688,7 +688,7 @@ async def add_new_agent_inboxes(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -774,7 +774,7 @@ async def patch_new_agent_inboxes(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -859,7 +859,7 @@ async def get_custom_filters(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -951,7 +951,7 @@ async def custom_filters(
     }
     """
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -1027,7 +1027,7 @@ async def update_custom_filter(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,
@@ -1105,7 +1105,7 @@ async def delete_custom_filter(
     db: AsyncSession,
 ):
     try:
-        if not await isCheckMaxLevel(current_user, db):
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.FORBIDDEN,

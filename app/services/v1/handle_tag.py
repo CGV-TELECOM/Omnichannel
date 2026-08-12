@@ -4,7 +4,7 @@ from app.db.models import Tag, User, Tenant, TagType, ticket_tag_association
 from sqlalchemy import select, func, or_, and_
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from app.schemas.requests.tag import TagCreate, TagUpdate
-from app.utils.helpers import isCheckMaxLevel, isCheckMaxLevelTenant
+from app.utils.helpers import is_platform_admin, isCheckMaxLevelTenant
 from uuid import UUID
 from datetime import datetime, timezone
 
@@ -30,7 +30,7 @@ async def get_tags(
             return await get_tag_by_id(id, db, current_user)
 
         # Check quyền super admin (level cao nhất)
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Check tenant active
         if not max_level_user:
@@ -153,7 +153,7 @@ async def get_tag_by_id(tag_id: UUID, db: AsyncSession, current_user: User):
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Query tag
         query = select(Tag).where(Tag.id == tag_id)
@@ -309,7 +309,7 @@ async def update_tag(tag_id: UUID, tag_data: TagUpdate, db: AsyncSession, curren
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Query tag
         query = select(Tag).where(Tag.id == tag_id)
@@ -415,7 +415,7 @@ async def soft_delete_tag(tag_id: UUID, db: AsyncSession, current_user: User):
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Query tag
         query = select(Tag).where(Tag.id == tag_id)
@@ -469,7 +469,7 @@ async def hard_delete_tag(tag_id: UUID, db: AsyncSession, current_user: User):
     """
     try:
         # Chỉ super admin mới được hard delete
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
         
         if not max_level_user:
             return api_response(
@@ -523,7 +523,7 @@ async def get_tag_statistics(db: AsyncSession, current_user: User):
     Chỉ thống kê tags thuộc tenant của user (trừ super admin).
     """
     try:
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         base_query = select(Tag)
         if not max_level_user:

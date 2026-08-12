@@ -5,7 +5,7 @@ from sqlalchemy import select, func, or_, and_
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from sqlalchemy.orm import selectinload
 from app.schemas.requests.ticket_flow import TicketFlowCreate, TicketFlowUpdate
-from app.utils.helpers import isCheckMaxLevel, isCheckMaxLevelTenant
+from app.utils.helpers import is_platform_admin, isCheckMaxLevelTenant
 from uuid import UUID
 from datetime import datetime, timezone
 
@@ -29,7 +29,7 @@ async def get_ticket_flows(
             return await get_ticket_flow_by_id(id, db, current_user)
 
         # Check quyền super admin (level cao nhất)
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Check tenant active
         if not max_level_user:
@@ -143,7 +143,7 @@ async def get_ticket_flow_by_id(flow_id: UUID, db: AsyncSession, current_user: U
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Query flow
         query = (
@@ -225,7 +225,7 @@ async def create_ticket_flow(flow_data: TicketFlowCreate, db: AsyncSession, curr
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Xác định tenant_id
         if max_level_user and flow_data.tenant_id:
@@ -322,7 +322,7 @@ async def update_ticket_flow(flow_id: UUID, flow_data: TicketFlowUpdate, db: Asy
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Query flow
         query = select(TicketFlow).where(TicketFlow.id == flow_id)
@@ -419,7 +419,7 @@ async def delete_ticket_flow(flow_id: UUID, db: AsyncSession, current_user: User
     """
     try:
         # Check quyền super admin
-        max_level_user = await isCheckMaxLevel(current_user, db)
+        max_level_user = await is_platform_admin(current_user, db)
 
         # Query flow
         query = (
