@@ -8,6 +8,7 @@ from sqlalchemy.future import select
 from app.core.security.password_utils import hash_password, verify_password
 from app.schemas.responses.api_response_rule import api_response
 from app.core.security.jwt import create_access_token, create_refresh_token, verify_token, verify_refresh_token
+from app.services.v1.handle_user import _build_webcall_summary
 from datetime import datetime, timezone
 import json
 
@@ -105,14 +106,23 @@ async def login(form_data, request, db: AsyncSession):
         )
         db.add(new_log)
         await db.commit()
-        
+
         return api_response(
             status=ResponseStatus.SUCCESS,
             message="Đăng nhập thành công",
             data={
                 "access_token": access_token,
                 "refresh_token": refresh_token,
-                "token_type": "bearer"
+                "token_type": "bearer",
+                "user": {
+                    "id": str(user.id),
+                    "username": user.username,
+                    "email": user.email,
+                    "fullname": user.fullname,
+                    "tenant_id": str(user.tenant_id) if user.tenant_id else None,
+                    "role": role_result.name if role_result else None,
+                    "webcall": _build_webcall_summary(user, tenant),
+                },
             },
             status_code=ResponseStatusCode.OK
         )

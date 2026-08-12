@@ -1,11 +1,12 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, Request, Query
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from app.core.config.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.v1 import handle_user
 from app.core.config.logging import log_user_action
 from app.core.security.permissions import has_permission
-from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
 from app.schemas.requests.user import CreateUserRequest, UpdateUserRequest
 from app.db.models import User
 from app.core.dependencies.dependencies import get_current_user_dependency
@@ -20,7 +21,29 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db),
     _ = Depends(has_permission("current_user"))
 ):
-    return await handle_user.get_current_user_or_none(request, db) 
+    return await handle_user.get_current_user_or_none(request, db)
+
+
+@router.get("/webcall")
+async def get_my_webcall(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    _ = Depends(has_permission("current_user")),
+):
+    """
+    Lấy full config softphone (sip_password, api_key, ws_server...).
+    FE chỉ gọi khi cần kết nối gọi — không cache.
+    """
+    body = await handle_user.get_my_webcall_config(current_user, db)
+    return JSONResponse(
+        content=jsonable_encoder(body),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, private",
+            "Pragma": "no-cache",
+        },
+    )
+
 
 @router.get("/all")
 async def get_all_users(

@@ -22,6 +22,67 @@ from uuid import UUID
 from datetime import datetime, timezone
 from app.integrations.chatwoot import client as chatwoot_client
 from app.db.models import ChatwootLegacyMap, ChatwootMapResourceType
+from app.core.config.webcall_defaults import merge_webcall_config
+
+
+def _build_webcall_credentials(user: User, tenant: Tenant | None) -> dict[str, Any]:
+    """
+    Full softphone config (có sip_password/api_key).
+    Chỉ trả qua GET /user/webcall — không nhét vào login /user/current.
+    Không trả webhook_secret.
+    """
+    cfg = merge_webcall_config(tenant.webcall_config if tenant else None)
+
+    extension = user.sip_extension or cfg.get("extension") or ""
+    sip_username = user.sip_username or extension
+    sip_domain = user.sip_domain or cfg.get("sip_domain") or ""
+    ws_server = user.sip_ws_server or cfg.get("ws_server") or ""
+    sip_password = user.sip_password or cfg.get("sip_password") or ""
+    api_key = user.webphone_api_key or cfg.get("api_key") or ""
+
+    return {
+        "webphone_enabled": bool(user.webphone_enabled),
+        "call_log_enabled": user.call_log_enabled is not False,
+        "call_recording_enabled": user.call_recording_enabled is not False,
+        "enable_widget": bool(cfg.get("enable_widget", True)),
+        "sip_only": bool(cfg.get("sip_only", True)),
+        "sip_extension": extension,
+        "sip_username": sip_username,
+        "sip_password": sip_password,
+        "sip_domain": sip_domain,
+        "ws_server": ws_server,
+        "sip_port": user.sip_port,
+        "sip_protocol": user.sip_protocol,
+        "api_key": api_key,
+        "domain_uuid": cfg.get("domain_uuid") or "",
+        "hotlines": cfg.get("hotlines") or [],
+        "webphone_process_id": user.webphone_process_id,
+        "webphone_agent_id": user.webphone_agent_id,
+    }
+
+
+def _build_webcall_summary(user: User, tenant: Tenant | None) -> dict[str, Any]:
+    """Flag nhẹ cho login /user/current — không chứa secret."""
+    creds = _build_webcall_credentials(user, tenant)
+    can_call = bool(
+        creds["webphone_enabled"]
+        and creds["enable_widget"]
+        and creds["sip_extension"]
+        and creds["sip_domain"]
+        and creds["ws_server"]
+    )
+    return {
+        "webphone_enabled": creds["webphone_enabled"],
+        "enable_widget": creds["enable_widget"],
+        "can_call": can_call,
+        "call_log_enabled": creds["call_log_enabled"],
+        "call_recording_enabled": creds["call_recording_enabled"],
+    }
+
+
+# Backward-compatible alias (nếu chỗ khác còn gọi)
+def _build_webcall_for_frontend(user: User, tenant: Tenant | None) -> dict[str, Any]:
+    return _build_webcall_summary(user, tenant)
 
 
 def _prospective_user_meta_for_sync(user: User, update_data: dict[str, Any]) -> dict[str, Any] | None:
@@ -202,7 +263,7 @@ async def get_current_user_or_none(request, db : AsyncSession):
         permissions = await get_user_permissions(user_id, db)
         # Tạo response với thông tin người dùng và quyền
 
-        tenant = await db.get(Tenant, user.tenant_id)
+        tenant = await db.get(Tenant, user.tenant_id) if user.tenant_id else None
 
         user_data = {
             "id": user.id,
@@ -217,7 +278,8 @@ async def get_current_user_or_none(request, db : AsyncSession):
             "agent_id": tenant.agent_id if tenant else None,
             "graph_activated": tenant.graph_activated if tenant else None,
             "meta_data": user.meta_data,
-            "permissions": permissions
+            "permissions": permissions,
+            "webcall": _build_webcall_summary(user, tenant),
         }
         
         return api_response(
@@ -240,7 +302,61 @@ async def get_current_user_or_none(request, db : AsyncSession):
             status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
             message="Lỗi không xác định",
         )
-    
+
+
+async def get_my_webcall_config(current_user: User, db: AsyncSession):
+    """
+    Trả full SIP credentials cho softphone.
+    Chỉ gọi khi FE cần kết nối gọi — không nhúng vào login/current.
+    """
+    try:
+        if current_user.webphone_enabled is False:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Tài khoản chưa bật webphone",
+                data=None,
+            )
+
+        tenant = (
+            await db.get(Tenant, current_user.tenant_id)
+            if current_user.tenant_id
+            else None
+        )
+        creds = _build_webcall_credentials(current_user, tenant)
+        if not (
+            creds["sip_extension"]
+            and creds["sip_domain"]
+            and creds["ws_server"]
+        ):
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.BAD_REQUEST,
+                message=(
+                    "Thiếu cấu hình softphone (sip_extension / sip_domain / ws_server). "
+                    "Liên hệ quản trị viên."
+                ),
+                data={
+                    "webphone_enabled": creds["webphone_enabled"],
+                    "can_call": False,
+                },
+            )
+
+        return api_response(
+            status=ResponseStatus.SUCCESS,
+            status_code=ResponseStatusCode.OK,
+            message="Lấy cấu hình webcall thành công",
+            data=creds,
+        )
+    except Exception as e:
+        return api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            message=f"Lỗi không xác định: {e}",
+            data=None,
+        )
+
+
 async def get_all_users(
     db: AsyncSession,
     current_user: User,

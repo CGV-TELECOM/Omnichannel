@@ -166,6 +166,7 @@ async def seed_rbac(db: AsyncSession):
         "create_messaging_user",
         "edit_messaging_user",
         "delete_messaging_user",
+        "view_messaging_reports",
         # Call log / telephony timeline
         "view_call_logs",
         "create_call_log",
@@ -306,6 +307,7 @@ async def seed_rbac(db: AsyncSession):
         "view_messaging_users",
         "create_messaging_user",
         "edit_messaging_user",
+        "view_messaging_reports",
         # Call log — agent: xem/tạo/sửa + xem timeline events (không delete)
         "view_call_logs",
         "create_call_log",
