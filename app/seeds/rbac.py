@@ -26,10 +26,41 @@ OBSOLETE_PERMISSION_NAMES = frozenset({
 })
 
 
+# Permissions chỉ dành cho Admin Platform (CGV) — mutate catalog / tenant hệ thống.
+# Tenant admin (admin-partner) KHÔNG được có các quyền này.
+PLATFORM_ONLY_PERMISSION_NAMES = frozenset({
+    "create_roles",
+    "edit_roles",
+    "delete_roles",
+    "view_permissions",
+    "create_permissions",
+    "edit_permissions",
+    "delete_permissions",
+    "assign_permissions_to_role",
+    "delete_permission_from_role",
+    "create_tenant",
+    "edit_tenant",
+    "delete_tenant",
+    "create_level",
+    "edit_level",
+    "delete_level",
+    # Messaging platform account — provision toàn hệ thống
+    "create_messaging_account",
+    "edit_messaging_account",
+    "delete_messaging_account",
+    "sync_messaging_integration",
+})
+
+
 async def seed_rbac(db: AsyncSession):
     """
     Seeds the database with initial roles, permissions, levels and an admin user.
     All IDs are now UUID V7 instead of Integer.
+
+    Roles:
+    - admin (Admin Platform / CGV): full permissions, is_platform_admin user
+    - admin-partner: admin khách hàng trong 1 tenant — không mutate catalog/tenant hệ thống
+    - user: agent vận hành least privilege
     """
     # Step 0: Create a default tenant if it doesn't exist (optional, for multi-tenant support)
     default_tenant = await _get_or_create_tenant(db, "Default Tenant", "Default tenant for seed data")
@@ -191,19 +222,53 @@ async def seed_rbac(db: AsyncSession):
             await db.refresh(permission)
         permissions.append(permission)
 
-    # Step 2: Create roles "admin" and "user" if they don't exist
-    admin_role_name = "admin"
-    user_role_name = "user"
+    perm_by_name = {p.name: p for p in permissions}
 
-    admin_role = await _get_or_create_role(db, admin_role_name, "Administrator role", 1000)
-    user_role = await _get_or_create_role(db, user_role_name, "Regular user role", 10)
+    # Step 2: Roles catalog
+    # - admin: Admin Platform (CGV) — full quyền, cross-tenant
+    # - admin-partner: admin khách hàng trong 1 tenant
+    # - user: agent vận hành
+    admin_role = await _get_or_create_role(
+        db,
+        "admin",
+        "Admin Platform (CGV) — quản trị toàn hệ thống, cross-tenant, quản lý catalog role/permission/tenant",
+        1000,
+    )
+    partner_role = await _get_or_create_role(
+        db,
+        "admin-partner",
+        "Admin khách hàng (tenant) — quản lý user/org/ticket/messaging trong tenant; không sửa catalog hệ thống",
+        100,
+    )
+    user_role = await _get_or_create_role(
+        db,
+        "user",
+        "Agent vận hành — xử lý ticket/conversation/customer trong phạm vi được giao",
+        10,
+    )
 
-    # Step 3: Create levels if they don't exist
+    # Step 3: Levels
     levels = [
-        {"name": "Admin", "description": "Administrator level", "level_order": 1000},
-        {"name": "Manager", "description": "Manager level", "level_order": 100},
-        {"name": "Staff", "description": "Staff level", "level_order": 10},
-        {"name": "User", "description": "Regular user level", "level_order": 1}
+        {
+            "name": "Admin",
+            "description": "Level Admin Platform (CGV ops) — chỉ dùng cho tài khoản is_platform_admin",
+            "level_order": 1000,
+        },
+        {
+            "name": "Manager",
+            "description": "Level quản lý tenant / admin khách hàng",
+            "level_order": 100,
+        },
+        {
+            "name": "Staff",
+            "description": "Level nhân viên / team lead trong tenant",
+            "level_order": 10,
+        },
+        {
+            "name": "User",
+            "description": "Level agent vận hành thường",
+            "level_order": 1,
+        },
     ]
     
     created_levels = []
@@ -220,19 +285,29 @@ async def seed_rbac(db: AsyncSession):
             db.add(level)
             await db.commit()
             await db.refresh(level)
+        else:
+            # Đồng bộ mô tả level theo kiến trúc mới
+            if level.description != level_data["description"]:
+                level.description = level_data["description"]
+                await db.commit()
+                await db.refresh(level)
         created_levels.append(level)
 
-    # Step 4: Assign permissions to roles (mọi role tên admin; gán đủ permission gồm messaging)
-    all_admin_roles = (await db.execute(select(Role).where(Role.name == "admin"))).scalars().all()
-    if not all_admin_roles:
-        all_admin_roles = [admin_role]
-    for role in all_admin_roles:
-        await _assign_permissions_to_role(db, role, permissions)
+    # Step 4: Sync permissions theo từng role
+    # 4.1 Admin Platform — toàn bộ permission
+    await _sync_permissions_to_role(db, admin_role, permissions)
 
-    # Role "user" = agent vận hành (least privilege).
-    # KHÔNG có: CRUD user/org (department/group), view_roles/tenants,
+    # 4.2 Admin-partner — mọi quyền trừ PLATFORM_ONLY
+    partner_perm_names = [
+        p.name for p in permissions if p.name not in PLATFORM_ONLY_PERMISSION_NAMES
+    ]
+    partner_perms = [perm_by_name[n] for n in partner_perm_names if n in perm_by_name]
+    await _sync_permissions_to_role(db, partner_role, partner_perms)
+
+    # 4.3 Role "user" = agent vận hành (least privilege).
+    # KHÔNG có: CRUD user/org, mutate roles/permissions/tenants,
     # mutate ticket flow/step (cấu hình), quản trị messaging team/user.
-    user_permissions = [
+    user_permission_names = [
         "current_user",
         "view_users",  # để assign ticket / conversation
         "view_levels",
@@ -290,13 +365,13 @@ async def seed_rbac(db: AsyncSession):
         "edit_call_log",
         "view_call_log_events",
     ]
-    user_permissions_objects = [p for p in permissions if p.name in user_permissions]
-    all_user_roles = (await db.execute(select(Role).where(Role.name == "user"))).scalars().all()
-    if not all_user_roles:
-        all_user_roles = [user_role]
-    for role in all_user_roles:
-        # Sync đầy đủ (thêm thiếu + gỡ thừa) để least-privilege có hiệu lực trên DB cũ
-        await _sync_permissions_to_role(db, role, user_permissions_objects)
+    user_permissions_objects = [perm_by_name[n] for n in user_permission_names if n in perm_by_name]
+    await _sync_permissions_to_role(db, user_role, user_permissions_objects)
+
+    print(
+        f"📋 Role sync: admin={len(permissions)} | "
+        f"admin-partner={len(partner_perms)} | user={len(user_permissions_objects)}"
+    )
 
     # Step 5: Create an admin user if they don't exist
     super_admin_level = next((l for l in created_levels if l.name == "Admin"), None)
@@ -350,15 +425,7 @@ async def _purge_obsolete_permissions(db: AsyncSession) -> None:
 async def _get_or_create_role(db: AsyncSession, role_name: str, description: str, role_order: int) -> Role:
     """
     Gets an existing role or creates a new one.
-
-    Args:
-        db: The database session.
-        role_name: The name of the role.
-        description: The description of the role.
-        role_order: The order of the role.
-
-    Returns:
-        The Role object.
+    Nếu đã tồn tại: cập nhật description / role_order / is_active cho khớp seed.
     """
     stmt = select(Role).filter_by(name=role_name)
     result = await db.execute(stmt)
@@ -372,6 +439,20 @@ async def _get_or_create_role(db: AsyncSession, role_name: str, description: str
         db.add(role)
         await db.commit()
         await db.refresh(role)
+    else:
+        changed = False
+        if role.description != description:
+            role.description = description
+            changed = True
+        if role.role_order != role_order:
+            role.role_order = role_order
+            changed = True
+        if role.is_active != 1:
+            role.is_active = 1
+            changed = True
+        if changed:
+            await db.commit()
+            await db.refresh(role)
     return role
 
 async def _assign_permissions_to_role(db: AsyncSession, role: Role, permissions: list[Permission]):
@@ -452,7 +533,7 @@ async def _create_admin_user(
         admin_user = User(
             username="admin",
             password=hash_password("admin123"),
-            fullname="Admin User",
+            fullname="Admin Platform (CGV)",
             role_id=role.id,  # UUID
             level_id=level.id if level else None,  # UUID or None
             is_active=1,
@@ -463,10 +544,23 @@ async def _create_admin_user(
         db.add(admin_user)
         await db.commit()
         await db.refresh(admin_user)
-    elif not admin_user.is_platform_admin:
-        admin_user.is_platform_admin = True
-        await db.commit()
-        await db.refresh(admin_user)
+    else:
+        changed = False
+        if not admin_user.is_platform_admin:
+            admin_user.is_platform_admin = True
+            changed = True
+        if admin_user.role_id != role.id:
+            admin_user.role_id = role.id
+            changed = True
+        if level and admin_user.level_id != level.id:
+            admin_user.level_id = level.id
+            changed = True
+        if admin_user.fullname != "Admin Platform (CGV)":
+            admin_user.fullname = "Admin Platform (CGV)"
+            changed = True
+        if changed:
+            await db.commit()
+            await db.refresh(admin_user)
     return admin_user
 
 async def _create_regular_user(

@@ -114,17 +114,15 @@ async def get_role_by_id(role_id: UUID, current_user: User, is_super_admin: bool
 
 async def create_role(role_data: CreateRoleRequest, current_user: User, db: AsyncSession):
     """
-    Catalog role dùng chung. Non-platform chỉ tạo được role có order thấp hơn mình.
+    Catalog role dùng chung — chỉ platform admin (CGV) được tạo.
     """
     try:
-        is_super_admin = await is_platform_admin(current_user, db)
-
-        if not is_super_admin and _role_order(current_user) <= role_data.role_order:
+        if not await is_platform_admin(current_user, db):
             return api_response(
                 status=ResponseStatus.ERROR,
-                message="Bạn chỉ có thể tạo role nhỏ hơn role_order của mình",
+                message="Chỉ platform admin mới được tạo vai trò trong catalog hệ thống",
                 data=None,
-                status_code=ResponseStatusCode.BAD_REQUEST
+                status_code=ResponseStatusCode.FORBIDDEN
             )
 
         result = await db.execute(
@@ -185,7 +183,13 @@ async def update_role(
     db: AsyncSession
 ):
     try:
-        is_super_admin = await is_platform_admin(current_user, db)
+        if not await is_platform_admin(current_user, db):
+            return api_response(
+                status=ResponseStatus.ERROR,
+                message="Chỉ platform admin mới được cập nhật vai trò trong catalog hệ thống",
+                data=None,
+                status_code=ResponseStatusCode.FORBIDDEN
+            )
 
         role = await db.scalar(select(Role).where(Role.id == role_id))
         if not role:
@@ -195,22 +199,6 @@ async def update_role(
                 data=None,
                 status_code=ResponseStatusCode.NOT_FOUND
             )
-
-        if not is_super_admin:
-            if (role.role_order or 0) >= _role_order(current_user):
-                return api_response(
-                    status=ResponseStatus.ERROR,
-                    message="Bạn chỉ có thể cập nhật role nhỏ hơn role_order của mình",
-                    data=None,
-                    status_code=ResponseStatusCode.FORBIDDEN
-                )
-            if role_data.role_order is not None and _role_order(current_user) <= role_data.role_order:
-                return api_response(
-                    status=ResponseStatus.ERROR,
-                    message="Bạn chỉ có thể cập nhật role nhỏ hơn role_order của mình",
-                    data=None,
-                    status_code=ResponseStatusCode.BAD_REQUEST
-                )
 
         existing_role = await db.scalar(
             select(Role).where(
@@ -254,7 +242,14 @@ async def update_role(
 
 async def delete_role(role_id: UUID, current_user: User, db: AsyncSession):
     try:
-        is_super_admin = await is_platform_admin(current_user, db)
+        if not await is_platform_admin(current_user, db):
+            return api_response(
+                status=ResponseStatus.ERROR,
+                message="Chỉ platform admin mới được xóa vai trò trong catalog hệ thống",
+                data=None,
+                status_code=ResponseStatusCode.FORBIDDEN
+            )
+
         role = await db.scalar(
             select(Role).where(and_(Role.id == role_id, Role.is_active == 1))
         )
@@ -265,13 +260,6 @@ async def delete_role(role_id: UUID, current_user: User, db: AsyncSession):
                 message="Vai trò không tồn tại",
                 data=None,
                 status_code=ResponseStatusCode.NOT_FOUND
-            )
-        if not is_super_admin and (role.role_order or 0) >= _role_order(current_user):
-            return api_response(
-                status=ResponseStatus.ERROR,
-                message="Bạn chỉ có thể xóa role nhỏ hơn role_order của mình",
-                data=None,
-                status_code=ResponseStatusCode.BAD_REQUEST
             )
 
         user_using_role = await db.scalar(

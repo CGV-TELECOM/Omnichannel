@@ -7,7 +7,7 @@ from app.db.models import User, Role, RolePermission, Permission, Levels, Group,
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from fastapi import HTTPException, status
 from app.core.security.jwt import get_user_id_from_token
 from app.core.security.permissions import get_user_permissions
@@ -328,6 +328,9 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
         user = user_query.scalars().first()
         if user is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Người dùng không tồn tại")
+
+        if user.is_active != 1:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Tài khoản đã bị vô hiệu hóa")
         
         # Check token_version - if token version doesn't match, token is invalid
         user_token_version = user.token_version if hasattr(user, 'token_version') else 0
@@ -369,6 +372,32 @@ async def get_current_user_or_none(request, db : AsyncSession):
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.UNAUTHORIZED,
                 message="Người dùng không tồn tại",
+            )
+
+        if user.is_active != 1:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.UNAUTHORIZED,
+                message="Tài khoản đã bị vô hiệu hóa",
+            )
+
+        # So khớp token_version (đổi password / disable user phải đá session)
+        try:
+            raw = token.split(" ", 1)[1] if " " in token else token
+            payload = jwt.decode(raw, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+            token_version = payload.get("token_version")
+            user_token_version = user.token_version if hasattr(user, "token_version") else 0
+            if token_version is None or token_version != user_token_version:
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.UNAUTHORIZED,
+                    message="Token đã bị vô hiệu hóa",
+                )
+        except JWTError:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.UNAUTHORIZED,
+                message="Token không hợp lệ",
             )
         
         # Lấy danh sách quyền của người dùng
@@ -898,6 +927,25 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
 
         try:
             await db.commit()
+        except IntegrityError as e:
+            await db.rollback()
+            if chatwoot_created_id is not None:
+                await chatwoot_client.application_request(
+                    "DELETE",
+                    f"/api/v1/accounts/{account_id}/agents/{chatwoot_created_id}",
+                )
+            err = str(getattr(e, "orig", e)).lower()
+            if "uq_users_username_tenant" in err or "username" in err:
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.CONFLICT,
+                    message=f"Tài khoản '{user_data.username}' đã tồn tại trong tenant này",
+                )
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.CONFLICT,
+                message="Dữ liệu bị trùng (username/email), vui lòng kiểm tra lại",
+            )
         except SQLAlchemyError:
             await db.rollback()
             if chatwoot_created_id is not None:
@@ -1288,19 +1336,30 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
             }
             user.meta_data = md_u
 
-        if password_changed:
-            user.token_version += 1
+        # Đổi password hoặc disable user → vô hiệu hóa JWT hiện tại
+        if password_changed or requested_deactivate:
+            user.token_version = (user.token_version or 0) + 1
 
         await db.commit()
         await db.refresh(user)
         
         # Send notification if password was changed
-        if password_changed:
+        if password_changed and not requested_deactivate:
             try:
                 from app.services.v1.handle_notification import notification_service
                 await notification_service.notify_password_changed(user.id)
             except Exception as e:
                 print(f"Failed to send password change notification: {str(e)}")
+
+        if requested_deactivate:
+            try:
+                from app.services.v1.handle_notification import notification_service
+                await notification_service.notify_user_kicked(
+                    user_id=user.id,
+                    reason="Tài khoản của bạn đã bị vô hiệu hóa bởi quản trị viên",
+                )
+            except Exception as e:
+                print(f"Failed to send kick notification: {str(e)}")
 
         tenant = await db.get(Tenant, user.tenant_id) if user.tenant_id else None
         user_response = _serialize_user(
@@ -1318,6 +1377,20 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
             data=user_response
         )
 
+    except IntegrityError as e:
+        await db.rollback()
+        err = str(getattr(e, "orig", e)).lower()
+        if "uq_users_username_tenant" in err or "username" in err:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.CONFLICT,
+                message="Tài khoản đã tồn tại trong tenant này",
+            )
+        return api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.CONFLICT,
+            message="Dữ liệu bị trùng, vui lòng kiểm tra lại",
+        )
     except SQLAlchemyError as e:
         print(f"Database error: {str(e)}")
         return api_response(

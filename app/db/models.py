@@ -30,9 +30,13 @@ class NotificationType(str, enum.Enum):
 
 class User(Base):
     __tablename__ = "users"
+    # Username unique trong từng tenant (login theo username + name_tenant)
+    __table_args__ = (
+        UniqueConstraint("username", "tenant_id", name="uq_users_username_tenant"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
-    username = Column(String(255), unique=True, nullable=False)
+    username = Column(String(255), nullable=False)
     password = Column(String(255))
     email = Column(String(255))
     fullname = Column(String(100))
