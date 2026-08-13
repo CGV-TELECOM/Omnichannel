@@ -793,14 +793,28 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
                     message="Email đã tồn tại"
                 )
 
-        # Kiểm tra role_id nếu có
+        # Kiểm tra role_id nếu có — role phải cùng tenant với user đích
         if user_data.role_id:
             stmt = select(Role).where(Role.id == user_data.role_id, Role.is_active == 1)
             stmt_result = await db.scalar(stmt)
             if not stmt_result:
                 return api_response(ResponseStatus.ERROR, ResponseStatusCode.NOT_FOUND, "Vai trò không tồn tại hoặc đã bị khóa")
+            if is_supper_admin:
+                # Platform: gán role platform (tenant_id null) hoặc role đúng tenant đích
+                if stmt_result.tenant_id is not None and stmt_result.tenant_id != user_tenant_id:
+                    return api_response(
+                        ResponseStatus.ERROR,
+                        ResponseStatusCode.BAD_REQUEST,
+                        "Vai trò không thuộc tenant của người dùng",
+                    )
             else:
-                if not is_supper_admin and _role_order_of(current_user) <= (stmt_result.role_order or 0):
+                if stmt_result.tenant_id != user_tenant_id:
+                    return api_response(
+                        ResponseStatus.ERROR,
+                        ResponseStatusCode.BAD_REQUEST,
+                        "Vai trò không thuộc tenant của bạn",
+                    )
+                if _role_order_of(current_user) <= (stmt_result.role_order or 0):
                     return api_response(ResponseStatus.ERROR, ResponseStatusCode.FORBIDDEN, "Bạn chỉ có thể tạo người dùng có vai trò nhỏ hơn vai trò của bạn")
             
         # Check level
@@ -1046,14 +1060,30 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     message="Bạn chỉ có thể cập nhật người dùng trong tenant của mình",
                 )
                 
-        # Kiểm tra role_id nếu có
+        # Kiểm tra role_id nếu có — role phải cùng tenant với user đích
         if user_data.role_id:
             stmt = select(Role).where(Role.id == user_data.role_id, Role.is_active == 1)
             stmt_result = await db.scalar(stmt)
             if not stmt_result:
                 return api_response(ResponseStatus.ERROR, ResponseStatusCode.NOT_FOUND, "Vai trò không tồn tại hoặc đã bị khóa")
+            target_tenant_for_role = (
+                user_data.tenant_id if user_data.tenant_id is not None else user.tenant_id
+            )
+            if is_supper_admin:
+                if stmt_result.tenant_id is not None and stmt_result.tenant_id != target_tenant_for_role:
+                    return api_response(
+                        ResponseStatus.ERROR,
+                        ResponseStatusCode.BAD_REQUEST,
+                        "Vai trò không thuộc tenant của người dùng",
+                    )
             else:
-                if not is_supper_admin and _role_order_of(current_user) <= (stmt_result.role_order or 0):
+                if stmt_result.tenant_id != target_tenant_for_role:
+                    return api_response(
+                        ResponseStatus.ERROR,
+                        ResponseStatusCode.BAD_REQUEST,
+                        "Vai trò không thuộc tenant của bạn",
+                    )
+                if _role_order_of(current_user) <= (stmt_result.role_order or 0):
                     return api_response(ResponseStatus.ERROR, ResponseStatusCode.FORBIDDEN, "Bạn chỉ có cập nhật người dùng có vai trò nhỏ hơn vai trò của bạn")
             
         # Check if new level is valid

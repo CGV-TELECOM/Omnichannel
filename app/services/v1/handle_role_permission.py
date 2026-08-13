@@ -16,6 +16,16 @@ def _role_order(user: User) -> int:
     return 0
 
 
+def _can_manage_tenant_role(current_user: User, role: Role) -> bool:
+    if role.tenant_id is None:
+        return False
+    if current_user.tenant_id is None:
+        return False
+    if role.tenant_id != current_user.tenant_id:
+        return False
+    return (role.role_order or 0) < _role_order(current_user)
+
+
 def group_permissions_by_action(permissions):
     grouped = defaultdict(list)
 
@@ -41,8 +51,7 @@ async def get_role_permissions(
     current_user: User
 ):
     """
-    Role/permission là catalog dùng chung.
-    Non-platform chỉ xem được quyền của role có order thấp hơn mình.
+    Xem permission của role cùng tenant với caller (kể cả platform admin).
     """
     try:
         is_super = await is_platform_admin(current_user, db)
@@ -55,12 +64,20 @@ async def get_role_permissions(
                 message="Vai trò không tồn tại"
             )
 
-        if not is_super and (role.role_order or 0) >= _role_order(current_user):
+        if role.tenant_id != current_user.tenant_id:
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.FORBIDDEN,
-                message="Bạn chỉ có thể xem quyền của vai trò thấp hơn vai trò của bạn"
+                message="Bạn chỉ có thể xem quyền của vai trò trong tenant của mình",
             )
+
+        if not is_super:
+            if (role.role_order or 0) >= _role_order(current_user):
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                    message="Bạn chỉ có thể xem quyền của vai trò thấp hơn vai trò của bạn"
+                )
 
         stmt = (
             select(Permission)
@@ -107,16 +124,12 @@ async def assign_permissions_to_role(
     current_user: User,
 ):
     """
-    Gán permission cho role trong catalog dùng chung.
-    Chỉ platform admin (CGV) được thao tác — tránh tenant admin đổi quyền toàn hệ thống.
+    Gán permission cho role.
+    - Platform admin: full
+    - Tenant admin: role cùng tenant + thấp hơn + subset quyền của caller
     """
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                status=ResponseStatus.ERROR,
-                status_code=ResponseStatusCode.FORBIDDEN,
-                message="Chỉ platform admin mới được gán quyền cho vai trò trong catalog hệ thống",
-            )
+        is_super = await is_platform_admin(current_user, db)
 
         role = await db.get(Role, role_id)
         if not role:
@@ -126,8 +139,38 @@ async def assign_permissions_to_role(
                 message="Role không tồn tại"
             )
 
+        if role.tenant_id is None or role.tenant_id != current_user.tenant_id:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Bạn chỉ có thể gán quyền cho vai trò trong tenant của mình",
+            )
+
+        if not is_super:
+            if not _can_manage_tenant_role(current_user, role):
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                    message="Bạn chỉ có thể gán quyền cho vai trò trong tenant của mình và thấp hơn vai trò của bạn",
+                )
+            caller_perm_result = await db.execute(
+                select(RolePermission.permission_id).where(
+                    RolePermission.role_id == current_user.role_id
+                )
+            )
+            caller_perm_ids = {row[0] for row in caller_perm_result.all()}
+            exceeded = [str(pid) for pid in permission_ids if pid not in caller_perm_ids]
+            if exceeded:
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                    message="Bạn không thể gán quyền ngoài phạm vi của mình"
+                )
+
         for permission_id in permission_ids:
             stmt = select(Permission).where(Permission.id == permission_id)
+            if not is_super:
+                stmt = stmt.where(Permission.is_active == 1)
             result = await db.execute(stmt)
             permission = result.scalar_one_or_none()
 
@@ -180,12 +223,7 @@ async def remove_permission_from_role(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                status=ResponseStatus.ERROR,
-                status_code=ResponseStatusCode.FORBIDDEN,
-                message="Chỉ platform admin mới được gỡ quyền khỏi vai trò trong catalog hệ thống",
-            )
+        is_super = await is_platform_admin(current_user, db)
 
         role = await db.get(Role, role_id)
         if not role:
@@ -193,6 +231,20 @@ async def remove_permission_from_role(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.NOT_FOUND,
                 message="Vai trò không tồn tại"
+            )
+
+        if role.tenant_id is None or role.tenant_id != current_user.tenant_id:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Bạn chỉ có thể gỡ quyền của vai trò trong tenant của mình",
+            )
+
+        if not is_super and not _can_manage_tenant_role(current_user, role):
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Bạn chỉ có thể gỡ quyền của vai trò trong tenant của mình và thấp hơn vai trò của bạn",
             )
 
         stmt_permission = select(Permission).where(Permission.id == permission_id)

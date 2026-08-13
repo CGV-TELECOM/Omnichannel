@@ -109,10 +109,30 @@ class Levels(Base):
 
 class Role(Base):
     __tablename__ = "roles"
+    __table_args__ = (
+        # Role thuộc tenant: unique name trong tenant
+        Index(
+            "uq_roles_tenant_name",
+            "tenant_id",
+            "name",
+            unique=True,
+            postgresql_where=text("tenant_id IS NOT NULL"),
+        ),
+        # Role platform (tenant_id NULL): unique name toàn hệ thống
+        Index(
+            "uq_roles_platform_name",
+            "name",
+            unique=True,
+            postgresql_where=text("tenant_id IS NULL"),
+        ),
+    )
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
-    name = Column(String(50),  nullable=False)
+    name = Column(String(50), nullable=False)
     description = Column(String(255))
     role_order = Column(Integer)
+    # NULL = role Admin Platform (CGV); UUID = role thuộc tenant
+    tenant_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     users = relationship("User", back_populates="role", lazy="selectin")
     role_permissions = relationship("RolePermission", back_populates="role")
     is_active = Column(Integer, default=1)

@@ -19,6 +19,7 @@ from typing import Any
 from app.integrations.chatwoot import client as chatwoot_client
 from app.integrations.chatwoot.account_payload import sanitize_platform_account_payload
 from app.core.config.webcall_defaults import merge_webcall_config
+from app.seeds.rbac import seed_tenant_default_roles
 
 
 async def _get_tenant_account_map(
@@ -262,6 +263,9 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
         if not isinstance(new_tenant.meta_data, dict):
             new_tenant.meta_data = {}
         new_tenant.meta_data["chatwoot_account"] = dict(chatwoot_payload)
+
+        # Seed role mặc định admin-partner + user cho tenant mới
+        await seed_tenant_default_roles(db, new_tenant.id)
 
         await db.commit()
         await db.refresh(new_tenant)

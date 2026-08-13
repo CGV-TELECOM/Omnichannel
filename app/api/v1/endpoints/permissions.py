@@ -23,6 +23,10 @@ async def get_permissions(
     id: Optional[UUID] = Query(None, description="ID của quyền"),
     db: AsyncSession = Depends(get_db),
     search: Optional[str] = Query(None, description="Từ khóa tìm kiếm"),
+    for_assign: bool = Query(
+        False,
+        description="true = chỉ trả quyền mà caller đang có (màn gán permission cho role)",
+    ),
     current_user: User = Depends(get_current_user_dependency),
     _ = Depends(has_permission("view_permissions"))
 ):
@@ -30,7 +34,8 @@ async def get_permissions(
         db=db,
         search=search,
         id=id,
-        current_user=current_user
+        current_user=current_user,
+        for_assign=for_assign,
     )
 
 @router.get("/{permission_id}")

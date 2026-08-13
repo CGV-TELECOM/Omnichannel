@@ -22,4 +22,5 @@ class RoleResponse(BaseModel):
     description: str | None
     role_order: int
     is_active: int
+    tenant_id: UUID | None = None
     model_config = ConfigDict(from_attributes=True)

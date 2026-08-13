@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.utils.helpers import is_platform_admin
 from app.db.models import User
 from app.schemas.requests.permission import CreatePermissionTenantRequest
+from app.seeds.rbac import infer_permission_belong_to
 from uuid import UUID
 
 
@@ -21,7 +22,8 @@ async def get_permissions(
     db: AsyncSession,
     current_user: User,
     search: str | None = None,
-    id: UUID | None = None
+    id: UUID | None = None,
+    for_assign: bool = False,
 ):
     try:
         if id:
@@ -29,23 +31,42 @@ async def get_permissions(
 
         # Permission là catalog dùng chung (không chia theo tenant).
         # Non-platform chỉ thấy permission đang active.
+        # for_assign=True: chỉ quyền thuộc role của caller (dùng khi gán cho role khác).
         user_max_level = await is_platform_admin(current_user, db)
 
+        if for_assign and not current_user.role_id:
+            return api_response(
+                status=ResponseStatus.SUCCESS,
+                status_code=ResponseStatusCode.OK,
+                message="Lấy danh sách quyền thành công (Tổng: 0 quyền)",
+                data={},
+            )
+
         query = select(Permission)
-        if not user_max_level:
+        if for_assign:
+            query = (
+                query.join(
+                    RolePermission,
+                    Permission.id == RolePermission.permission_id,
+                )
+                .where(RolePermission.role_id == current_user.role_id)
+            )
+            # Khi gán quyền chỉ lấy perm active (kể cả platform admin)
+            query = query.where(Permission.is_active == 1)
+        elif not user_max_level:
             query = query.where(Permission.is_active == 1)
 
         if search:
-            search = f"%{search}%"
+            search_pattern = f"%{search}%"
             query = query.where(
                 or_(
-                    Permission.name.ilike(search),
-                    Permission.description.ilike(search)
+                    Permission.name.ilike(search_pattern),
+                    Permission.description.ilike(search_pattern)
                 )
             )
 
         result = await db.execute(query)
-        permissions = result.scalars().all()
+        permissions = result.scalars().unique().all()
         count = len(permissions)
 
         # ===============================
@@ -66,10 +87,14 @@ async def get_permissions(
                 "belong_to": permission.belong_to
             })
 
+        msg_suffix = " (chỉ quyền có thể gán)" if for_assign else ""
         return api_response(
             status=ResponseStatus.SUCCESS,
             status_code=ResponseStatusCode.OK,
-            message="Lấy danh sách quyền thành công" + (f" (Tổng: {count} quyền)" if count > 0 else ""),
+            message=(
+                f"Lấy danh sách quyền thành công{msg_suffix}"
+                + (f" (Tổng: {count} quyền)" if count > 0 else "")
+            ),
             data=grouped_permissions
         )
 
@@ -169,6 +194,7 @@ async def create_tenant_permission(
             new_permission = Permission(
                 name=item.name,
                 description=item.description,
+                belong_to=infer_permission_belong_to(item.name),
             )
             db.add(new_permission)
             permissions.append(new_permission)
