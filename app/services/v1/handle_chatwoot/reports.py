@@ -64,7 +64,7 @@ REPORT_TYPES = frozenset({"account", "agent", "inbox", "label", "team"})
 REPORT_GROUP_BY = frozenset({"day", "week", "month", "year", "hour"})
 
 # summary_reports/{kind} (Chatwoot >= 4.10)
-SUMMARY_REPORT_KINDS = frozenset({"agent", "team", "label", "channel"})
+SUMMARY_REPORT_KINDS = frozenset({"agent", "team", "label", "channel", "inbox"})
 
 
 def _to_epoch_str(value: Optional[str]) -> Optional[str]:

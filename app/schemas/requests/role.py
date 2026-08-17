@@ -9,7 +9,7 @@ class RoleBase(BaseModel):
 
 
 class CreateRoleRequest(RoleBase):
-    pass
+    tenant_id: UUID | None = None
 
 
 class UpdateRoleRequest(RoleBase):

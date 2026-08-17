@@ -39,6 +39,46 @@ def _role_order_of(user: User) -> int:
     return 0
 
 
+def _role_assignment_error(
+    role: Role,
+    *,
+    user_tenant_id,
+    will_be_platform_admin: bool,
+    caller_is_platform_admin: bool,
+    current_user: User,
+    action: str,
+):
+    """
+    Role platform (tenant_id NULL) chỉ gắn cho tài khoản is_platform_admin.
+    Role tenant phải cùng tenant với user đích.
+    """
+    if role.tenant_id is None:
+        if not caller_is_platform_admin or not will_be_platform_admin:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Role Admin Platform chỉ được gán cho tài khoản platform admin (CGV)",
+            )
+        return None
+
+    if role.tenant_id != user_tenant_id:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.BAD_REQUEST,
+            "Vai trò không thuộc tenant của người dùng"
+            if caller_is_platform_admin
+            else "Vai trò không thuộc tenant của bạn",
+        )
+
+    if not caller_is_platform_admin and _role_order_of(current_user) <= (role.role_order or 0):
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            f"Bạn chỉ có thể {action} người dùng có vai trò nhỏ hơn vai trò của bạn",
+        )
+    return None
+
+
 _WEBPHONE_WRITE_FIELDS = frozenset({
     "webphone_enabled",
     "sip_extension",
@@ -793,30 +833,26 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
                     message="Email đã tồn tại"
                 )
 
-        # Kiểm tra role_id nếu có — role phải cùng tenant với user đích
+        # Kiểm tra role_id nếu có — role platform chỉ cho CGV; role tenant phải khớp tenant
         if user_data.role_id:
             stmt = select(Role).where(Role.id == user_data.role_id, Role.is_active == 1)
             stmt_result = await db.scalar(stmt)
             if not stmt_result:
                 return api_response(ResponseStatus.ERROR, ResponseStatusCode.NOT_FOUND, "Vai trò không tồn tại hoặc đã bị khóa")
-            if is_supper_admin:
-                # Platform: gán role platform (tenant_id null) hoặc role đúng tenant đích
-                if stmt_result.tenant_id is not None and stmt_result.tenant_id != user_tenant_id:
-                    return api_response(
-                        ResponseStatus.ERROR,
-                        ResponseStatusCode.BAD_REQUEST,
-                        "Vai trò không thuộc tenant của người dùng",
-                    )
-            else:
-                if stmt_result.tenant_id != user_tenant_id:
-                    return api_response(
-                        ResponseStatus.ERROR,
-                        ResponseStatusCode.BAD_REQUEST,
-                        "Vai trò không thuộc tenant của bạn",
-                    )
-                if _role_order_of(current_user) <= (stmt_result.role_order or 0):
-                    return api_response(ResponseStatus.ERROR, ResponseStatusCode.FORBIDDEN, "Bạn chỉ có thể tạo người dùng có vai trò nhỏ hơn vai trò của bạn")
-            
+            will_be_platform_admin = bool(
+                is_supper_admin and user_data.is_platform_admin is True
+            )
+            role_err = _role_assignment_error(
+                stmt_result,
+                user_tenant_id=user_tenant_id,
+                will_be_platform_admin=will_be_platform_admin,
+                caller_is_platform_admin=is_supper_admin,
+                current_user=current_user,
+                action="tạo",
+            )
+            if role_err:
+                return role_err
+
         # Check level
         if user_data.level_id is not None:
             stmt = select(Levels).where(Levels.id == user_data.level_id)
@@ -1060,7 +1096,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     message="Bạn chỉ có thể cập nhật người dùng trong tenant của mình",
                 )
                 
-        # Kiểm tra role_id nếu có — role phải cùng tenant với user đích
+        # Kiểm tra role_id nếu có — role platform chỉ cho CGV; role tenant phải khớp tenant
         if user_data.role_id:
             stmt = select(Role).where(Role.id == user_data.role_id, Role.is_active == 1)
             stmt_result = await db.scalar(stmt)
@@ -1069,23 +1105,39 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
             target_tenant_for_role = (
                 user_data.tenant_id if user_data.tenant_id is not None else user.tenant_id
             )
-            if is_supper_admin:
-                if stmt_result.tenant_id is not None and stmt_result.tenant_id != target_tenant_for_role:
-                    return api_response(
-                        ResponseStatus.ERROR,
-                        ResponseStatusCode.BAD_REQUEST,
-                        "Vai trò không thuộc tenant của người dùng",
-                    )
+            if user_data.is_platform_admin is not None:
+                will_be_platform_admin = (
+                    bool(user_data.is_platform_admin)
+                    if is_supper_admin
+                    else bool(user.is_platform_admin)
+                )
             else:
-                if stmt_result.tenant_id != target_tenant_for_role:
-                    return api_response(
-                        ResponseStatus.ERROR,
-                        ResponseStatusCode.BAD_REQUEST,
-                        "Vai trò không thuộc tenant của bạn",
-                    )
-                if _role_order_of(current_user) <= (stmt_result.role_order or 0):
-                    return api_response(ResponseStatus.ERROR, ResponseStatusCode.FORBIDDEN, "Bạn chỉ có cập nhật người dùng có vai trò nhỏ hơn vai trò của bạn")
-            
+                will_be_platform_admin = bool(user.is_platform_admin)
+            role_err = _role_assignment_error(
+                stmt_result,
+                user_tenant_id=target_tenant_for_role,
+                will_be_platform_admin=will_be_platform_admin,
+                caller_is_platform_admin=is_supper_admin,
+                current_user=current_user,
+                action="cập nhật",
+            )
+            if role_err:
+                return role_err
+
+        # Bỏ cờ platform nhưng vẫn giữ role admin global → không cho
+        if (
+            is_supper_admin
+            and user_data.is_platform_admin is False
+            and not user_data.role_id
+            and user.role is not None
+            and user.role.tenant_id is None
+        ):
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Gỡ platform admin thì phải đổi sang role thuộc tenant, không giữ role Admin Platform",
+            )
+
         # Check if new level is valid
         if user_data.level_id is not None:
             stmt = select(Levels).where(Levels.id == user_data.level_id)

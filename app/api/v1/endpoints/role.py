@@ -23,10 +23,16 @@ async def get_roles(request: Request,
                     search: Optional[str] = Query(None, description="Từ khóa tìm kiếm"),
                     sort_by: Optional[str] = Query(None, description="Trường sắp xếp"),
                     sort_order: str = Query("asc", description="Thứ tự sắp xếp (asc/desc)"),
+                    tenant_id: Optional[UUID] = Query(
+                        None,
+                        description="Chỉ platform admin: xem role của tenant đích. Tenant khác bị bỏ qua.",
+                    ),
                     _ = Depends(has_permission("view_roles")),
                     current_user: User = Depends(get_current_user_dependency),
                     db: AsyncSession = Depends(get_db)):
-    return await handle_role.get_roles(id, page, page_size, search, sort_by, sort_order, db, current_user)
+    return await handle_role.get_roles(
+        id, page, page_size, search, sort_by, sort_order, db, current_user, tenant_id
+    )
 
 
 # @router.get("/{role_id}")

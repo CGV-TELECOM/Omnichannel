@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.responses.api_response_rule import api_response
 from app.schemas.responses.api_response_rule import ResponseStatus, ResponseStatusCode
-from app.db.models import Role, User
+from app.db.models import Role, User, Tenant
 from sqlalchemy import select, func, and_
 from app.schemas.requests.role import CreateRoleRequest, UpdateRoleRequest, RoleResponse
 from app.utils.helpers import is_platform_admin
@@ -26,6 +26,49 @@ def _can_manage_tenant_role(current_user: User, role: Role) -> bool:
     return (role.role_order or 0) < _role_order(current_user)
 
 
+async def _scope_tenant_id(
+    current_user: User,
+    is_super: bool,
+    requested_tenant_id: UUID | None,
+    db: AsyncSession,
+):
+    """
+    Tenant admin: luôn tenant đang login (bỏ qua requested).
+    Platform: requested_tenant_id hoặc tenant đang login.
+    Trả (tenant_id, error_response).
+    """
+    if not is_super:
+        if current_user.tenant_id is None:
+            return None, api_response(
+                status=ResponseStatus.ERROR,
+                message="Tài khoản chưa thuộc tenant, không thể thao tác vai trò",
+                data=None,
+                status_code=ResponseStatusCode.FORBIDDEN,
+            )
+        return current_user.tenant_id, None
+
+    target = requested_tenant_id or current_user.tenant_id
+    if target is None:
+        return None, api_response(
+            status=ResponseStatus.ERROR,
+            message="Cần chọn tenant để xem / tạo vai trò",
+            data=None,
+            status_code=ResponseStatusCode.BAD_REQUEST,
+        )
+
+    tenant = await db.scalar(
+        select(Tenant).where(Tenant.id == target, Tenant.is_active == 1)
+    )
+    if not tenant:
+        return None, api_response(
+            status=ResponseStatus.ERROR,
+            message="Tenant không tồn tại hoặc đã bị vô hiệu hóa",
+            data=None,
+            status_code=ResponseStatusCode.BAD_REQUEST,
+        )
+    return target, None
+
+
 async def get_roles(
     id: UUID | None,
     page: int,
@@ -34,12 +77,13 @@ async def get_roles(
     sort_by: str,
     sort_order: str,
     db: AsyncSession,
-    current_user: User
+    current_user: User,
+    tenant_id: UUID | None = None,
 ):
     """
-    Chỉ trả role thuộc tenant của caller (kể cả platform admin).
-    - Không lẫn role tenant khác / template global (tenant_id NULL)
-    - Tenant admin: thêm is_active=1 và role_order < mình
+    Role theo tenant.
+    - Tenant admin: chỉ tenant đang login
+    - Platform: ?tenant_id= tenant đích; thiếu thì tenant đang login
     """
     try:
         is_super_admin = await is_platform_admin(current_user, db)
@@ -47,23 +91,19 @@ async def get_roles(
         if id:
             return await get_role_by_id(id, current_user, is_super_admin, db)
 
-        if current_user.tenant_id is None:
-            return api_response(
-                status=ResponseStatus.ERROR,
-                message="Tài khoản chưa thuộc tenant, không thể xem danh sách vai trò",
-                data=None,
-                status_code=ResponseStatusCode.FORBIDDEN,
-            )
+        scope_tenant_id, err = await _scope_tenant_id(
+            current_user, is_super_admin, tenant_id, db
+        )
+        if err:
+            return err
 
         offset = (page - 1) * page_size
-        # Mọi user (kể cả platform admin) chỉ thấy role của tenant mình
-        filters = [Role.tenant_id == current_user.tenant_id]
+        filters = [
+            Role.tenant_id == scope_tenant_id,
+            Role.is_active == 1,
+        ]
         if not is_super_admin:
-            filters.append(Role.is_active == 1)
             filters.append(Role.role_order < _role_order(current_user))
-        else:
-            # Ẩn bản soft-delete trong tenant; template global vốn đã bị loại vì tenant_id filter
-            filters.append(Role.is_active == 1)
         if search:
             filters.append(Role.name.ilike(f"%{search}%"))
 
@@ -103,24 +143,14 @@ async def get_roles(
 
 async def get_role_by_id(role_id: UUID, current_user: User, is_super_admin: bool, db: AsyncSession):
     try:
-        filters = [Role.id == role_id]
-        # Platform admin cũng chỉ xem role cùng tenant (không xem role tenant khác / global template)
-        if current_user.tenant_id is not None:
-            filters.append(Role.tenant_id == current_user.tenant_id)
-        elif not is_super_admin:
-            return api_response(
-                status=ResponseStatus.INFO,
-                message="Không tìm thấy vai trò này",
-                status_code=ResponseStatusCode.BAD_REQUEST,
-            )
-
-        if not is_super_admin:
+        filters = [Role.id == role_id, Role.is_active == 1]
+        if is_super_admin:
+            filters.append(Role.tenant_id.isnot(None))
+        else:
             filters.extend([
-                Role.is_active == 1,
+                Role.tenant_id == current_user.tenant_id,
                 Role.role_order < _role_order(current_user),
             ])
-        else:
-            filters.append(Role.is_active == 1)
 
         role = await db.scalar(select(Role).where(*filters))
 
@@ -149,19 +179,20 @@ async def get_role_by_id(role_id: UUID, current_user: User, is_super_admin: bool
 
 async def create_role(role_data: CreateRoleRequest, current_user: User, db: AsyncSession):
     """
-    Tạo role trong tenant của caller (platform admin cũng gắn tenant của mình).
-    Role platform `admin` (tenant_id NULL) chỉ do seed — không tạo qua API.
+    Tạo role trong tenant scope.
+    - Tenant admin: tenant đang login
+    - Platform: body.tenant_id hoặc tenant đang login
+    Role platform `admin` (tenant_id NULL) chỉ do seed.
     """
     try:
         is_super = await is_platform_admin(current_user, db)
 
-        if current_user.tenant_id is None:
-            return api_response(
-                status=ResponseStatus.ERROR,
-                message="Tài khoản chưa thuộc tenant, không thể tạo vai trò",
-                data=None,
-                status_code=ResponseStatusCode.FORBIDDEN,
-            )
+        requested = role_data.tenant_id if is_super else None
+        target_tenant_id, err = await _scope_tenant_id(
+            current_user, is_super, requested, db
+        )
+        if err:
+            return err
 
         if not is_super and _role_order(current_user) <= role_data.role_order:
             return api_response(
@@ -170,8 +201,6 @@ async def create_role(role_data: CreateRoleRequest, current_user: User, db: Asyn
                 data=None,
                 status_code=ResponseStatusCode.FORBIDDEN,
             )
-
-        target_tenant_id = current_user.tenant_id
 
         name_filter = and_(
             func.upper(Role.name) == role_data.name.upper(),
@@ -247,7 +276,6 @@ async def update_role(
                 status_code=ResponseStatusCode.NOT_FOUND
             )
 
-        # Không cho sửa role platform (tenant_id NULL) qua API list tenant
         if role.tenant_id is None:
             return api_response(
                 status=ResponseStatus.ERROR,
@@ -256,15 +284,14 @@ async def update_role(
                 status_code=ResponseStatusCode.FORBIDDEN,
             )
 
-        if role.tenant_id != current_user.tenant_id:
-            return api_response(
-                status=ResponseStatus.ERROR,
-                message="Bạn chỉ có thể cập nhật role trong tenant của mình",
-                data=None,
-                status_code=ResponseStatusCode.FORBIDDEN,
-            )
-
         if not is_super:
+            if role.tenant_id != current_user.tenant_id:
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    message="Bạn chỉ có thể cập nhật role trong tenant của mình",
+                    data=None,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                )
             if not _can_manage_tenant_role(current_user, role):
                 return api_response(
                     status=ResponseStatus.ERROR,
@@ -342,15 +369,14 @@ async def delete_role(role_id: UUID, current_user: User, db: AsyncSession):
                 status_code=ResponseStatusCode.FORBIDDEN,
             )
 
-        if role.tenant_id != current_user.tenant_id:
-            return api_response(
-                status=ResponseStatus.ERROR,
-                message="Bạn chỉ có thể xóa role trong tenant của mình",
-                data=None,
-                status_code=ResponseStatusCode.FORBIDDEN,
-            )
-
         if not is_super:
+            if role.tenant_id != current_user.tenant_id:
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    message="Bạn chỉ có thể xóa role trong tenant của mình",
+                    data=None,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                )
             if not _can_manage_tenant_role(current_user, role):
                 return api_response(
                     status=ResponseStatus.ERROR,

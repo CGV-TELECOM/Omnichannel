@@ -51,7 +51,8 @@ async def get_role_permissions(
     current_user: User
 ):
     """
-    Xem permission của role cùng tenant với caller (kể cả platform admin).
+    Tenant admin: role cùng tenant.
+    Platform: role tenant bất kỳ (không gồm role platform tenant_id NULL).
     """
     try:
         is_super = await is_platform_admin(current_user, db)
@@ -64,7 +65,14 @@ async def get_role_permissions(
                 message="Vai trò không tồn tại"
             )
 
-        if role.tenant_id != current_user.tenant_id:
+        if role.tenant_id is None:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Không xem permission của role platform qua API này",
+            )
+
+        if not is_super and role.tenant_id != current_user.tenant_id:
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.FORBIDDEN,
@@ -139,7 +147,14 @@ async def assign_permissions_to_role(
                 message="Role không tồn tại"
             )
 
-        if role.tenant_id is None or role.tenant_id != current_user.tenant_id:
+        if role.tenant_id is None:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Không gán quyền cho role platform qua API này",
+            )
+
+        if not is_super and role.tenant_id != current_user.tenant_id:
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.FORBIDDEN,
@@ -233,7 +248,14 @@ async def remove_permission_from_role(
                 message="Vai trò không tồn tại"
             )
 
-        if role.tenant_id is None or role.tenant_id != current_user.tenant_id:
+        if role.tenant_id is None:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Không gỡ quyền của role platform qua API này",
+            )
+
+        if not is_super and role.tenant_id != current_user.tenant_id:
             return api_response(
                 status=ResponseStatus.ERROR,
                 status_code=ResponseStatusCode.FORBIDDEN,
