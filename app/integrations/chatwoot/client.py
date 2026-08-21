@@ -104,7 +104,6 @@ async def platform_request(
     base = _base_url()
     token = settings.CHATWOOT_PLATFORM_API_TOKEN
 
-    print(f"Check token: {token}")
     if not base:
         return ChatwootResult(
             503, {"description": "CHATWOOT_BASE_URL chưa cấu hình"}, "", ""

@@ -53,6 +53,21 @@ CHATWOOT_ACCOUNT_FEATURE_FLAG_KEYS_KNOWN = frozenset(
 )
 
 
+# Chỉ các field Platform API account chấp nhận. OmniHub (chatbot_enabled, ...) không gửi sang.
+CHATWOOT_ACCOUNT_TOP_LEVEL_KEYS = frozenset(
+    {
+        "name",
+        "locale",
+        "domain",
+        "support_email",
+        "status",
+        "features",
+        "limits",
+        "custom_attributes",
+    }
+)
+
+
 def sanitize_platform_account_payload(
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -62,8 +77,11 @@ def sanitize_platform_account_payload(
     - Nếu `features` rỗng sau lọc → xóa key (không gửi {}).
     Trả về (payload_sạch, meta cho API response / log).
     """
-    out: dict[str, Any] = dict(payload)
+    dropped = [k for k in payload.keys() if k not in CHATWOOT_ACCOUNT_TOP_LEVEL_KEYS]
+    out: dict[str, Any] = {k: v for k, v in payload.items() if k in CHATWOOT_ACCOUNT_TOP_LEVEL_KEYS}
     meta: dict[str, Any] = {}
+    if dropped:
+        meta["stripped_non_chatwoot_keys"] = dropped
 
     if "features" in out and isinstance(out["features"], dict):
         raw_feats: dict[str, Any] = out["features"]

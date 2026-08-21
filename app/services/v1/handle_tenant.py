@@ -21,6 +21,56 @@ from app.integrations.chatwoot.account_payload import sanitize_platform_account_
 from app.core.config.webcall_defaults import merge_webcall_config
 from app.seeds.rbac import seed_tenant_default_roles
 
+# meta_data chỉ dùng nội bộ OmniHub — không đồng bộ Platform API khi chỉ sửa các key này
+_CHATWOOT_META_SYNC_KEYS = frozenset(
+    {
+        "locale",
+        "domain",
+        "support_email",
+        "status",
+        "features",
+        "limits",
+        "custom_attributes",
+    }
+)
+
+
+def _messaging_error_status(code: int) -> int:
+    """Không copy 401 messaging sang HTTP 401 (FE sẽ tưởng JWT chết)."""
+    if code in (404, 422, 503):
+        return code
+    return 502
+
+
+def _should_sync_chatwoot_on_update(updates: dict) -> bool:
+    """Bật/tắt bot, graph, webcall: lưu local, không PATCH Chatwoot."""
+    if "name" in updates:
+        return True
+    meta = updates.get("meta_data")
+    if isinstance(meta, dict):
+        return bool(set(meta.keys()) & _CHATWOOT_META_SYNC_KEYS)
+    return False
+
+
+def _should_sync_chatwoot_on_update_for_tenant(
+    tenant: Tenant,
+    updates: dict[str, Any],
+) -> bool:
+    """
+    Chỉ sync Chatwoot khi field account thực sự thay đổi.
+    FE thường gửi full payload, nên không thể chỉ dựa vào key xuất hiện.
+    """
+    if "name" in updates and updates.get("name") != tenant.name:
+        return True
+
+    meta = updates.get("meta_data")
+    current_meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+    if isinstance(meta, dict):
+        for key in _CHATWOOT_META_SYNC_KEYS:
+            if key in meta and meta.get(key) != current_meta.get(key):
+                return True
+    return False
+
 
 async def _get_tenant_account_map(
     db: AsyncSession, tenant_id: UUID
@@ -203,7 +253,7 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             await db.rollback()
             return api_response(
                 ResponseStatus.ERROR,
-                cw_res.status_code if cw_res.status_code in (401, 404, 422, 503) else 502,
+                _messaging_error_status(cw_res.status_code),
                 "Tạo account messaging thất bại, đã rollback tạo tenant",
                 {
                     "messaging_status_code": cw_res.status_code,
@@ -334,13 +384,18 @@ async def updateTenant(
         
         # 4. Cập nhật dữ liệu
         updates = tenant_data.model_dump(exclude_unset=True)
+        # Quyết định sync dựa trên giá trị thực sự thay đổi, không chỉ dựa vào key có mặt.
+        sync_chatwoot = _should_sync_chatwoot_on_update_for_tenant(tenant, updates)
         if "webcall_config" in updates:
             updates["webcall_config"] = merge_webcall_config(updates["webcall_config"])
+        if "meta_data" in updates and isinstance(updates["meta_data"], dict):
+            existing_meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+            updates["meta_data"] = {**existing_meta, **updates["meta_data"]}
         for field, value in updates.items():
             setattr(tenant, field, value)
 
         account_map = await _get_tenant_account_map(db, tenant.id)
-        if account_map:
+        if account_map and sync_chatwoot:
             cw_body, _ = _tenant_chatwoot_account_payload(tenant)
             cw_res = await chatwoot_client.platform_request(
                 "PATCH",
@@ -351,14 +406,14 @@ async def updateTenant(
                 await db.rollback()
                 return api_response(
                     ResponseStatus.ERROR,
-                    cw_res.status_code if cw_res.status_code in (401, 404, 422, 503) else 502,
+                    _messaging_error_status(cw_res.status_code),
                     "Cập nhật account messaging thất bại",
                     {
                         "messaging_status_code": cw_res.status_code,
                         "messaging_response": cw_res.data,
                     },
                 )
-        else:
+        elif not account_map and sync_chatwoot:
             cw_create_body, _ = _tenant_chatwoot_account_payload(tenant)
             cw_create = await chatwoot_client.platform_request(
                 "POST",
@@ -373,7 +428,7 @@ async def updateTenant(
                 await db.rollback()
                 return api_response(
                     ResponseStatus.ERROR,
-                    cw_create.status_code if cw_create.status_code in (401, 404, 422, 503) else 502,
+                    _messaging_error_status(cw_create.status_code),
                     "Tenant chưa có map và tạo account messaging mới thất bại",
                     {
                         "messaging_status_code": cw_create.status_code,
@@ -402,8 +457,9 @@ async def updateTenant(
 
         if not isinstance(tenant.meta_data, dict):
             tenant.meta_data = {}
-        snap, _ = _tenant_chatwoot_account_payload(tenant)
-        tenant.meta_data["chatwoot_account"] = dict(snap)
+        if sync_chatwoot:
+            snap, _ = _tenant_chatwoot_account_payload(tenant)
+            tenant.meta_data["chatwoot_account"] = dict(snap)
 
         await db.commit()
         await db.refresh(tenant)
@@ -467,7 +523,7 @@ async def deleteTenant(tenant_id: UUID, current_user: User, request, db: AsyncSe
             if cw_res.status_code not in (200, 204, 404):
                 return api_response(
                     ResponseStatus.ERROR,
-                    cw_res.status_code if cw_res.status_code in (401, 404, 422, 503) else 502,
+                    _messaging_error_status(cw_res.status_code),
                     "Xóa account messaging thất bại",
                     {
                         "messaging_status_code": cw_res.status_code,

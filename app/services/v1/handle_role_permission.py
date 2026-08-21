@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.db.models import User
 from uuid import UUID
 from app.utils.helpers import is_platform_admin
+from app.seeds.rbac import PLATFORM_ONLY_PERMISSION_NAMES
 from collections import defaultdict
 
 
@@ -132,8 +133,8 @@ async def assign_permissions_to_role(
     current_user: User,
 ):
     """
-    Gán permission cho role.
-    - Platform admin: full
+    Gán permission cho role tenant.
+    - Platform admin: gán mọi quyền active trừ PLATFORM_ONLY
     - Tenant admin: role cùng tenant + thấp hơn + subset quyền của caller
     """
     try:
@@ -182,18 +183,32 @@ async def assign_permissions_to_role(
                     message="Bạn không thể gán quyền ngoài phạm vi của mình"
                 )
 
-        for permission_id in permission_ids:
-            stmt = select(Permission).where(Permission.id == permission_id)
+        if permission_ids:
+            stmt = select(Permission).where(Permission.id.in_(permission_ids))
             if not is_super:
                 stmt = stmt.where(Permission.is_active == 1)
             result = await db.execute(stmt)
-            permission = result.scalar_one_or_none()
-
-            if not permission:
+            permissions = list(result.scalars().all())
+            found_ids = {p.id for p in permissions}
+            missing = [str(pid) for pid in permission_ids if pid not in found_ids]
+            if missing:
                 return api_response(
                     status=ResponseStatus.ERROR,
                     status_code=ResponseStatusCode.NOT_FOUND,
-                    message=f"Quyền với ID {permission_id} không tồn tại"
+                    message=f"Quyền không tồn tại hoặc không hợp lệ: {', '.join(missing)}"
+                )
+
+            # Role tenant không được nhận quyền chỉ dành cho CGV / platform
+            platform_only = [
+                p.name for p in permissions if p.name in PLATFORM_ONLY_PERMISSION_NAMES
+            ]
+            if platform_only:
+                return api_response(
+                    status=ResponseStatus.ERROR,
+                    status_code=ResponseStatusCode.FORBIDDEN,
+                    message=(
+                        "Không thể gán quyền chỉ dành cho Admin Platform vào role tenant"
+                    ),
                 )
 
         await db.execute(
