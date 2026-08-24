@@ -150,6 +150,20 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                             note_text="Nhân viên hỗ trợ đã tiếp nhận. Bot tự động tạm dừng.",
                         )
 
+        # CSAT: chỉ khi status chuyển → resolved (không chạy mọi conversation_updated)
+        if event_type in ("conversation_status_changed", "conversation_updated"):
+            from app.services.v1.handle_conversation_rating import (
+                handle_resolved_conversation_payload,
+            )
+
+            await handle_resolved_conversation_payload(
+                db,
+                tenant_id=tenant_id,
+                messaging_account_id=int(account_id),
+                payload=payload,
+                event_type=event_type,
+            )
+
         return api_response(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,

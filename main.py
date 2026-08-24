@@ -37,6 +37,10 @@ from app.api.v1.endpoints.customer_provided_info import router as router_custome
 from app.api.v1.endpoints.chatwoot import router as router_chatwoot
 from app.api.v1.endpoints.chatwoot.webhook import router as router_chatwoot_webhook
 from app.api.v1.endpoints.telephony_webhook import router as router_telephony_webhook
+from app.api.v1.endpoints.conversation_rating import (
+    public_router as router_ratings_public,
+    router as router_conversation_ratings,
+)
 # WebSocket & Notifications
 from app.core.socket.manager import socket_manager
 from app.api.v1.endpoints.notification import router as router_notification
@@ -55,6 +59,7 @@ app = FastAPI()
 app.include_router(router_auth, prefix="/api/v1", tags=["Auth"])
 app.include_router(router_chatwoot_webhook, prefix="/api/v1")
 app.include_router(router_telephony_webhook, prefix="/api/v1")
+app.include_router(router_ratings_public, prefix="/api/v1")
 protected_routers = [
     router_user,
     router_role_permission,
@@ -81,6 +86,7 @@ protected_routers = [
     router_chatwoot,
     router_call_log,
     router_test_email,
+    router_conversation_ratings,
 ]
 
 origins = [

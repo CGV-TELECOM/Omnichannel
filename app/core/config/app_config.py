@@ -73,6 +73,21 @@ class Settings:
         "CHATWOOT_INTEGRATION_USER_ID"
     )
     PUBLIC_BACKEND_URL: str | None = os.getenv("PUBLIC_BACKEND_URL")
+    # CSAT omnichannel: base URL trang đánh giá FE, VD https://app.example/rate
+    # Link gửi khách = {PUBLIC_RATING_BASE_URL}/{token}
+    PUBLIC_RATING_BASE_URL: str | None = os.getenv("PUBLIC_RATING_BASE_URL")
+    RATING_TOKEN_EXPIRE_HOURS: int = int(os.getenv("RATING_TOKEN_EXPIRE_HOURS", "72"))
+    # Khoảng cách tối thiểu giữa 2 lần gửi CSAT cùng conversation (giờ).
+    # VD 1: resolve lại trong < 1h → không gửi; >= 1h → gửi survey mới.
+    # 0 = không cooldown (mỗi lần resolve đều được gửi nếu đủ điều kiện khác).
+    RATING_RESEND_COOLDOWN_HOURS: float = float(
+        os.getenv("RATING_RESEND_COOLDOWN_HOURS", "1")
+    )
+    # Chống double-fire webhook + toggle_status cùng một lần resolve (giây).
+    # Luôn áp dụng kể cả khi RATING_RESEND_COOLDOWN_HOURS=0. 0 = tắt dedupe.
+    RATING_RESOLVE_DEDUPE_SECONDS: int = int(
+        os.getenv("RATING_RESOLVE_DEDUPE_SECONDS", "60")
+    )
     # Knowledge Graph (KG) Chatbot settings
     KG_CORE_URL: str = os.getenv("KG_CORE_URL", "https://techstorehust.site/api/v1/chat/completions/stream")
     KG_CORE_API_KEY: str | None = os.getenv("KG_CORE_API_KEY")

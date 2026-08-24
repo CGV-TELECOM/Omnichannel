@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, List, Tuple
 from urllib.parse import quote
 from uuid import UUID
@@ -39,6 +40,8 @@ from app.services.v1.handle_chatwoot._shared import (
     _tenant_application_forward,
     _walk_redact_agent_refs,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def list_conversations(
@@ -646,7 +649,7 @@ async def toggle_conversation_status(
 ):
     """POST .../toggle_status — toggle-status-of-a-conversation."""
     payload = body.model_dump(mode="json", exclude_none=True)
-    return await _tenant_application_forward(
+    result = await _tenant_application_forward(
         current_user,
         tenant_id,
         db,
@@ -661,6 +664,28 @@ async def toggle_conversation_status(
         error_message="Đổi trạng thái conversation thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
     )
+    # MVP CSAT: sau khi resolve thành công → tạo + gửi link (idempotent với webhook)
+    if (
+        body.status == "resolved"
+        and isinstance(result, dict)
+        and result.get("status") == ResponseStatus.SUCCESS.value
+    ):
+        try:
+            from app.services.v1.handle_conversation_rating import (
+                fetch_channel_and_send_on_resolve,
+            )
+
+            account_id, _ = await _resolve_account_id(db, tenant_id)
+            if account_id is not None:
+                await fetch_channel_and_send_on_resolve(
+                    db,
+                    tenant_id=tenant_id,
+                    messaging_account_id=int(account_id),
+                    conversation_id=int(conversation_id),
+                )
+        except Exception as e:
+            logger.warning("CSAT sau toggle_status thất bại (không ảnh hưởng API): %s", e)
+    return result
 
 
 async def get_conversation_labels(

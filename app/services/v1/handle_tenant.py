@@ -235,6 +235,11 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             agent_id=tenant_data.agent_id,
             graph_activated=tenant_data.graph_activated if tenant_data.graph_activated is not None else 0,
             webcall_config=merge_webcall_config(tenant_data.webcall_config),
+            conversation_rating_enabled=(
+                True
+                if tenant_data.conversation_rating_enabled is None
+                else bool(tenant_data.conversation_rating_enabled)
+            ),
         )
         db.add(new_tenant)
         await db.flush()

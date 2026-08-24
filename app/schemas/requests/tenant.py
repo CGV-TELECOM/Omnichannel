@@ -51,6 +51,13 @@ class GroupBase(BaseModel):
             }
         },
     )
+    conversation_rating_enabled: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Bật/tắt gửi link đánh giá CSAT OmniHub khi resolve conversation "
+            "(kênh ngoài web widget). Mặc định true."
+        ),
+    )
 
 class TenantCreate(GroupBase):
     pass

@@ -207,7 +207,13 @@ class Tenant(Base):
         nullable=True,
         default=lambda: dict(DEFAULT_WEBCALL_CONFIG),
     )
-    
+    # CSAT omnichannel: bật/tắt gửi link đánh giá khi resolve (kênh ngoài web widget)
+    conversation_rating_enabled = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
 
 # manhnx - 18-06-2026: lưu lại thông tin được cung cấp từ KH
 class CustomerProvidedInfo(Base):
@@ -652,4 +658,77 @@ class CallLogEvent(Base):
     __table_args__ = (
         Index("ix_call_log_events_sip_received", "sip_call_id", "received_at"),
         Index("ix_call_log_events_tenant_state_received", "tenant_id", "state", "received_at"),
+    )
+
+
+class ConversationRatingStatus(str, enum.Enum):
+    """Trạng thái khảo sát CSAT omnichannel (MVP: link + token)."""
+
+    PENDING = "pending"
+    SUBMITTED = "submitted"
+    EXPIRED = "expired"
+
+
+class ConversationRating(Base):
+    """
+    Đánh giá sau hội thoại (CSAT) — OmniHub sở hữu.
+    Dùng cho kênh ngoài web widget (Zalo, FB, …); live chat có thể giữ CSAT Chatwoot.
+    """
+
+    __tablename__ = "conversation_ratings"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
+    tenant_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    messaging_account_id = Column(Integer, nullable=False, index=True)
+    conversation_id = Column(Integer, nullable=False, index=True)
+    channel = Column(String(100), nullable=True, index=True)
+    inbox_id = Column(Integer, nullable=True)
+    agent_chatwoot_id = Column(Integer, nullable=True)
+    score = Column(Integer, nullable=True)  # 1–5 khi submitted
+    comment = Column(Text, nullable=True)
+    status = Column(
+        String(20),
+        nullable=False,
+        default=ConversationRatingStatus.PENDING.value,
+        index=True,
+    )
+    token = Column(String(64), nullable=False, unique=True, index=True)
+    rating_url = Column(String(512), nullable=True)
+    sent_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    submitted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    meta_data = Column(JSONB, nullable=True)
+
+    tenant = relationship("Tenant", backref="conversation_ratings")
+
+    __table_args__ = (
+        # Cho phép nhiều survey / conversation (re-resolve sau cooldown).
+        Index(
+            "ix_conversation_ratings_tenant_account_conv_created",
+            "tenant_id",
+            "messaging_account_id",
+            "conversation_id",
+            "created_at",
+        ),
+        Index(
+            "ix_conversation_ratings_tenant_status_created",
+            "tenant_id",
+            "status",
+            "created_at",
+        ),
     )
