@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID  
 
 class GroupBase(BaseModel):
@@ -71,3 +71,26 @@ class TenantResponse(GroupBase):
 
     class Config:
         from_attributes = True  # để serialize từ ORM
+
+
+class TenantOwnSettingsUpdate(BaseModel):
+    """PATCH /tenants/me/settings — chỉ field vận hành, không đổi tên/provision."""
+
+    conversation_rating_enabled: Optional[bool] = Field(
+        default=None,
+        description="Bật/tắt gửi link đánh giá CSAT khi resolve (kênh ngoài web widget).",
+    )
+    chatbot_enabled: Optional[bool] = Field(
+        default=None,
+        description="Bật/tắt chatbot OmniHub (lưu meta_data, không sync Chatwoot).",
+    )
+    default_responder: Optional[Literal["bot", "agent"]] = Field(
+        default=None,
+        description="Người trả lời mặc định khi có chat mới: bot hoặc agent.",
+    )
+
+
+class TenantOwnSettingsResponse(BaseModel):
+    conversation_rating_enabled: bool
+    chatbot_enabled: bool
+    default_responder: Literal["bot", "agent"]

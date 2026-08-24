@@ -6,15 +6,22 @@ from app.db.models import (
     ChatwootLegacyMap,
     ChatwootMapResourceType,
 )
-from app.schemas.requests.tenant import TenantCreate, TenantResponse, TenantUpdate 
+from app.schemas.requests.tenant import (
+    TenantCreate,
+    TenantOwnSettingsResponse,
+    TenantOwnSettingsUpdate,
+    TenantResponse,
+    TenantUpdate,
+) 
 from sqlalchemy import select, func,  or_
 from uuid import UUID
 from sqlalchemy.future import select
 from fastapi import Request
 from app.utils.helpers import is_platform_admin
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm.attributes import flag_modified
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from app.integrations.chatwoot import client as chatwoot_client
 from app.integrations.chatwoot.account_payload import sanitize_platform_account_payload
@@ -562,4 +569,122 @@ async def deleteTenant(tenant_id: UUID, current_user: User, request, db: AsyncSe
             ResponseStatus.ERROR, 
             ResponseStatusCode.INTERNAL_SERVER_ERROR, 
             "Có lỗi không xác định xảy ra"
+        )
+
+
+_DEFAULT_RESPONDER: Literal["bot", "agent"] = "bot"
+
+
+def _tenant_own_settings_payload(tenant: Tenant) -> TenantOwnSettingsResponse:
+    meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+    responder = meta.get("default_responder", _DEFAULT_RESPONDER)
+    if responder not in ("bot", "agent"):
+        responder = _DEFAULT_RESPONDER
+    return TenantOwnSettingsResponse(
+        conversation_rating_enabled=bool(
+            getattr(tenant, "conversation_rating_enabled", True)
+        ),
+        chatbot_enabled=meta.get("chatbot_enabled") is not False,
+        default_responder=responder,
+    )
+
+
+async def _require_own_tenant(current_user: User, db: AsyncSession):
+    if current_user.tenant_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "Tài khoản chưa thuộc tenant nào",
+        )
+    tenant = await db.get(Tenant, current_user.tenant_id)
+    if tenant is None or tenant.is_active == 0:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.NOT_FOUND,
+            "Không tìm thấy tenant của bạn",
+        )
+    return tenant
+
+
+async def getOwnTenantSettings(current_user: User, db: AsyncSession):
+    try:
+        tenant = await _require_own_tenant(current_user, db)
+        if not isinstance(tenant, Tenant):
+            return tenant
+        return api_response(
+            ResponseStatus.SUCCESS,
+            ResponseStatusCode.OK,
+            "Lấy cài đặt tenant thành công",
+            data=_tenant_own_settings_payload(tenant),
+        )
+    except Exception as e:
+        print(f"[UNEXPECTED ERROR] getOwnTenantSettings: {e}")
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Có lỗi không xác định xảy ra",
+        )
+
+
+async def updateOwnTenantSettings(
+    current_user: User,
+    settings_data: TenantOwnSettingsUpdate,
+    db: AsyncSession,
+):
+    """
+    Admin tenant cập nhật cài đặt vận hành của chính tenant mình.
+    Không đổi tên / graph / webcall / Chatwoot account — không sync Platform API.
+    """
+    try:
+        tenant = await _require_own_tenant(current_user, db)
+        if not isinstance(tenant, Tenant):
+            return tenant
+
+        updates = settings_data.model_dump(exclude_unset=True)
+        if not updates:
+            return api_response(
+                ResponseStatus.SUCCESS,
+                ResponseStatusCode.OK,
+                "Không có thay đổi",
+                data=_tenant_own_settings_payload(tenant),
+            )
+
+        if "conversation_rating_enabled" in updates:
+            tenant.conversation_rating_enabled = bool(
+                updates["conversation_rating_enabled"]
+            )
+
+        if "chatbot_enabled" in updates or "default_responder" in updates:
+            meta = dict(tenant.meta_data) if isinstance(tenant.meta_data, dict) else {}
+            if "chatbot_enabled" in updates:
+                meta["chatbot_enabled"] = bool(updates["chatbot_enabled"])
+            if "default_responder" in updates:
+                meta["default_responder"] = updates["default_responder"]
+            tenant.meta_data = meta
+            flag_modified(tenant, "meta_data")
+
+        await db.commit()
+        await db.refresh(tenant)
+
+        return api_response(
+            ResponseStatus.SUCCESS,
+            ResponseStatusCode.OK,
+            "Cập nhật cài đặt tenant thành công",
+            data=_tenant_own_settings_payload(tenant),
+        )
+    except SQLAlchemyError as e:
+        await db.rollback()
+        print(f"[DB ERROR] updateOwnTenantSettings: {e}")
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Có lỗi xảy ra khi thao tác với cơ sở dữ liệu",
+        )
+    except Exception as e:
+        await db.rollback()
+        print(f"[UNEXPECTED ERROR] updateOwnTenantSettings: {e}")
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Có lỗi không xác định xảy ra",
         )

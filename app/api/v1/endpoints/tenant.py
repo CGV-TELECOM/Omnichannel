@@ -4,7 +4,7 @@ from app.core.config.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security.permissions import has_permission
 from app.services.v1 import handle_tenant 
-from app.schemas.requests.tenant import TenantCreate, TenantUpdate
+from app.schemas.requests.tenant import TenantCreate, TenantOwnSettingsUpdate, TenantUpdate
 from uuid import UUID
 from app.db.models import User 
 from app.core.dependencies.dependencies import get_current_user_dependency
@@ -41,6 +41,31 @@ async def createTenant(
     current_user: User = Depends(get_current_user_dependency)
 ):
     return await handle_tenant.createTenant(request, current_user, tenant_data, db)
+
+
+@router.get("/me/settings")
+async def getOwnTenantSettings(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    _=Depends(has_permission("view_own_tenant_settings")),
+):
+    """Cài đặt vận hành tenant hiện tại (CSAT, chatbot) — admin-partner."""
+    return await handle_tenant.getOwnTenantSettings(current_user, db)
+
+
+@router.patch("/me/settings")
+@log_user_action("updateOwnTenantSettings")
+async def updateOwnTenantSettings(
+    request: Request,
+    settings_data: TenantOwnSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    _=Depends(has_permission("edit_own_tenant_settings")),
+):
+    """Chỉ cập nhật conversation_rating_enabled / chatbot_enabled / default_responder."""
+    return await handle_tenant.updateOwnTenantSettings(
+        current_user, settings_data, db
+    )
 
 
 @router.put("/{tenant_id}")

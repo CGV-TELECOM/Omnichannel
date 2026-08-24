@@ -61,6 +61,8 @@ _PERMISSION_BELONG_TO_SPECIAL = {
     "create_call_log": "call_log",
     "edit_call_log": "call_log",
     "view_call_log_events": "call_log_event",
+    "view_own_tenant_settings": "tenant_setting",
+    "edit_own_tenant_settings": "tenant_setting",
 }
 
 
@@ -270,6 +272,9 @@ async def seed_rbac(db: AsyncSession):
         "create_tenant",
         "edit_tenant",
         "delete_tenant",
+        # Cài đặt vận hành tenant (admin-partner) — không nằm PLATFORM_ONLY
+        "view_own_tenant_settings",
+        "edit_own_tenant_settings",
         # Messaging (omnichannel) — public API /messaging/*
         "view_messaging_accounts",
         "create_messaging_account",
