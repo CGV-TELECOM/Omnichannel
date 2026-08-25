@@ -343,58 +343,96 @@ def _agents_payload_as_list(data: Any) -> list[Any] | None:
     return None
 
 
-async def _ensure_tenant_agent_map(
-    db: AsyncSession, tenant_id: UUID, chatwoot_numeric_id: int
-) -> ChatwootLegacyMap:
+async def _ensure_tenant_maps_bulk(
+    db: AsyncSession,
+    tenant_id: UUID,
+    resource_type: ChatwootMapResourceType,
+    chatwoot_ids: list[int] | set[int] | tuple[int, ...],
+) -> dict[int, ChatwootLegacyMap]:
+    """
+    Prefetch + tạo map thiếu theo (tenant, resource_type, chatwoot_id).
+    1 SELECT + tối đa 1 flush — tránh N+1 trên list agents/teams/bots.
+    """
+    unique_ids = sorted({int(i) for i in chatwoot_ids})
+    if not unique_ids:
+        return {}
+
     q = await db.execute(
         select(ChatwootLegacyMap).where(
             and_(
-                ChatwootLegacyMap.resource_type == ChatwootMapResourceType.AGENT,
+                ChatwootLegacyMap.resource_type == resource_type,
                 ChatwootLegacyMap.tenant_id == tenant_id,
-                ChatwootLegacyMap.chatwoot_id == chatwoot_numeric_id,
+                ChatwootLegacyMap.chatwoot_id.in_(unique_ids),
             )
         )
     )
-    row = q.scalar_one_or_none()
-    if row:
-        return row
-    row = ChatwootLegacyMap(
-        resource_type=ChatwootMapResourceType.AGENT,
-        local_uuid=generate_uuid7(),
-        chatwoot_id=chatwoot_numeric_id,
-        tenant_id=tenant_id,
-        created_at=datetime.now(timezone.utc),
+    by_cw: dict[int, ChatwootLegacyMap] = {
+        int(row.chatwoot_id): row for row in q.scalars().all()
+    }
+
+    now = datetime.now(timezone.utc)
+    created = False
+    for cw_id in unique_ids:
+        if cw_id in by_cw:
+            continue
+        row = ChatwootLegacyMap(
+            resource_type=resource_type,
+            local_uuid=generate_uuid7(),
+            chatwoot_id=cw_id,
+            tenant_id=tenant_id,
+            created_at=now,
+        )
+        db.add(row)
+        by_cw[cw_id] = row
+        created = True
+    if created:
+        await db.flush()
+    return by_cw
+
+
+async def _ensure_tenant_agent_maps_bulk(
+    db: AsyncSession, tenant_id: UUID, chatwoot_ids: list[int] | set[int]
+) -> dict[int, ChatwootLegacyMap]:
+    return await _ensure_tenant_maps_bulk(
+        db, tenant_id, ChatwootMapResourceType.AGENT, chatwoot_ids
     )
-    db.add(row)
-    await db.flush()
-    return row
+
+
+async def _ensure_tenant_agent_bot_maps_bulk(
+    db: AsyncSession, tenant_id: UUID, chatwoot_ids: list[int] | set[int]
+) -> dict[int, ChatwootLegacyMap]:
+    return await _ensure_tenant_maps_bulk(
+        db, tenant_id, ChatwootMapResourceType.AGENT_BOT, chatwoot_ids
+    )
+
+
+async def _ensure_tenant_team_maps_bulk(
+    db: AsyncSession, tenant_id: UUID, chatwoot_ids: list[int] | set[int]
+) -> dict[int, ChatwootLegacyMap]:
+    return await _ensure_tenant_maps_bulk(
+        db, tenant_id, ChatwootMapResourceType.TEAM, chatwoot_ids
+    )
+
+
+async def _ensure_tenant_agent_map(
+    db: AsyncSession, tenant_id: UUID, chatwoot_numeric_id: int
+) -> ChatwootLegacyMap:
+    maps = await _ensure_tenant_agent_maps_bulk(db, tenant_id, [chatwoot_numeric_id])
+    return maps[chatwoot_numeric_id]
 
 
 async def _ensure_tenant_agent_bot_map(
     db: AsyncSession, tenant_id: UUID, chatwoot_numeric_id: int
 ) -> ChatwootLegacyMap:
-    q = await db.execute(
-        select(ChatwootLegacyMap).where(
-            and_(
-                ChatwootLegacyMap.resource_type == ChatwootMapResourceType.AGENT_BOT,
-                ChatwootLegacyMap.tenant_id == tenant_id,
-                ChatwootLegacyMap.chatwoot_id == chatwoot_numeric_id,
-            )
-        )
-    )
-    row = q.scalar_one_or_none()
-    if row:
-        return row
-    row = ChatwootLegacyMap(
-        resource_type=ChatwootMapResourceType.AGENT_BOT,
-        local_uuid=generate_uuid7(),
-        chatwoot_id=chatwoot_numeric_id,
-        tenant_id=tenant_id,
-        created_at=datetime.now(timezone.utc),
-    )
-    db.add(row)
-    await db.flush()
-    return row
+    maps = await _ensure_tenant_agent_bot_maps_bulk(db, tenant_id, [chatwoot_numeric_id])
+    return maps[chatwoot_numeric_id]
+
+
+async def _ensure_tenant_team_map(
+    db: AsyncSession, tenant_id: UUID, chatwoot_numeric_id: int
+) -> ChatwootLegacyMap:
+    maps = await _ensure_tenant_team_maps_bulk(db, tenant_id, [chatwoot_numeric_id])
+    return maps[chatwoot_numeric_id]
 
 
 async def _map_tenant_agent_by_local(

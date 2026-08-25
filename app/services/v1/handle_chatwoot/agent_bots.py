@@ -27,6 +27,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _chatwoot_agent_bot_public,
     _chatwoot_error_payload,
     _ensure_tenant_agent_bot_map,
+    _ensure_tenant_agent_bot_maps_bulk,
     _map_tenant_agent_bot_by_local,
     _platform_agent_bot_create_payload,
     _platform_agent_bot_update_payload,
@@ -128,6 +129,8 @@ async def list_tenant_agent_bots(
             if isinstance(b, dict) and _agent_bot_belongs_to_account(b, account_id)
         ]
         public_bots: list[dict[str, Any]] = []
+        cw_ids: list[int] = []
+        parsed: list[tuple[dict[str, Any], int]] = []
         for b in filtered:
             if not isinstance(b, dict) or b.get("id") is None:
                 continue
@@ -135,8 +138,11 @@ async def list_tenant_agent_bots(
                 cw_id = int(b["id"])
             except (TypeError, ValueError):
                 continue
-            m = await _ensure_tenant_agent_bot_map(db, tenant_id, cw_id)
-            public_bots.append(_chatwoot_agent_bot_public(b, m.local_uuid))
+            cw_ids.append(cw_id)
+            parsed.append((b, cw_id))
+        maps = await _ensure_tenant_agent_bot_maps_bulk(db, tenant_id, cw_ids)
+        for b, cw_id in parsed:
+            public_bots.append(_chatwoot_agent_bot_public(b, maps[cw_id].local_uuid))
         await db.commit()
         return api_response(
             ResponseStatus.SUCCESS,

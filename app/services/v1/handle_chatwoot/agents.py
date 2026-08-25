@@ -24,6 +24,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _chatwoot_agent_public,
     _chatwoot_error_payload,
     _ensure_tenant_agent_map,
+    _ensure_tenant_agent_maps_bulk,
     _map_tenant_agent_by_local,
     _resolve_account_id,
 )
@@ -68,17 +69,26 @@ async def list_agents(
                     {"tenant_id": str(tenant_id), "agents": data},
                 )
             public: list[dict[str, Any]] = []
+            cw_ids: list[int] = []
+            parsed: list[tuple[dict[str, Any], int | None]] = []
             for item in raw_list:
                 if not isinstance(item, dict) or item.get("id") is None:
-                    public.append(item)  # type: ignore[arg-type]
+                    parsed.append((item, None))  # type: ignore[arg-type]
                     continue
                 try:
                     cw_id = int(item["id"])
                 except (TypeError, ValueError):
-                    public.append(item)  # type: ignore[arg-type]
+                    parsed.append((item, None))
                     continue
-                m = await _ensure_tenant_agent_map(db, tenant_id, cw_id)
-                public.append(_chatwoot_agent_public(item, m.local_uuid))
+                cw_ids.append(cw_id)
+                parsed.append((item, cw_id))
+
+            maps = await _ensure_tenant_agent_maps_bulk(db, tenant_id, cw_ids)
+            for item, cw_id in parsed:
+                if cw_id is None:
+                    public.append(item)
+                    continue
+                public.append(_chatwoot_agent_public(item, maps[cw_id].local_uuid))
             await db.commit()
             return api_response(
                 ResponseStatus.SUCCESS,

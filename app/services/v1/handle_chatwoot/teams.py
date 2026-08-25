@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
 from fastapi import Request
-from sqlalchemy import and_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import ChatwootLegacyMap, ChatwootMapResourceType, User, generate_uuid7
+from app.db.models import User
 from app.integrations.chatwoot import client as chatwoot_client
 from app.schemas.requests.chatwoot import (
     ChatwootTeamCreateBody,
@@ -27,7 +25,9 @@ from app.services.v1.handle_chatwoot._shared import (
     _forward_all_query_pairs,
     _require_tenant_access,
     _resolve_account_id,
-    _ensure_tenant_agent_map,
+    _ensure_tenant_agent_maps_bulk,
+    _ensure_tenant_team_map,
+    _ensure_tenant_team_maps_bulk,
     _chatwoot_agent_public,
     _agents_payload_as_list,
     _map_tenant_team_by_local,
@@ -38,37 +38,30 @@ from app.services.v1.handle_chatwoot._shared import (
 logger = logging.getLogger(__name__)
 
 
-async def _ensure_tenant_team_map(
-    db: AsyncSession, tenant_id: UUID, chatwoot_numeric_id: int
-) -> ChatwootLegacyMap:
-    q = await db.execute(
-        select(ChatwootLegacyMap).where(
-            and_(
-                ChatwootLegacyMap.resource_type == ChatwootMapResourceType.TEAM,
-                ChatwootLegacyMap.tenant_id == tenant_id,
-                ChatwootLegacyMap.chatwoot_id == chatwoot_numeric_id,
-            )
-        )
-    )
-    row = q.scalar_one_or_none()
-    if row:
-        return row
-    row = ChatwootLegacyMap(
-        resource_type=ChatwootMapResourceType.TEAM,
-        local_uuid=generate_uuid7(),
-        chatwoot_id=chatwoot_numeric_id,
-        tenant_id=tenant_id,
-        created_at=datetime.now(timezone.utc),
-    )
-    db.add(row)
-    await db.flush()
-    return row
-
-
 def _chatwoot_team_public(team: dict[str, Any], local_uuid: UUID) -> dict[str, Any]:
     out = {k: v for k, v in team.items() if k not in ("id", "account_id")}
     out["id"] = str(local_uuid)
     return out
+
+
+def _collect_chatwoot_ids(
+    items: list[Any],
+) -> tuple[list[int], list[tuple[Any, int | None]]]:
+    """Parse list payload → (cw_ids, [(item, cw_id|None), ...])."""
+    cw_ids: list[int] = []
+    parsed: list[tuple[Any, int | None]] = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("id") is None:
+            parsed.append((item, None))
+            continue
+        try:
+            cw_id = int(item["id"])
+        except (TypeError, ValueError):
+            parsed.append((item, None))
+            continue
+        cw_ids.append(cw_id)
+        parsed.append((item, cw_id))
+    return cw_ids, parsed
 
 
 async def list_teams(
@@ -106,17 +99,13 @@ async def list_teams(
                     {"tenant_id": str(tenant_id), "teams": data},
                 )
             public_teams = []
-            for item in data:
-                if not isinstance(item, dict) or item.get("id") is None:
+            cw_ids, parsed = _collect_chatwoot_ids(data)
+            maps = await _ensure_tenant_team_maps_bulk(db, tenant_id, cw_ids)
+            for item, cw_id in parsed:
+                if cw_id is None:
                     public_teams.append(item)
                     continue
-                try:
-                    cw_id = int(item["id"])
-                except (TypeError, ValueError):
-                    public_teams.append(item)
-                    continue
-                m = await _ensure_tenant_team_map(db, tenant_id, cw_id)
-                public_teams.append(_chatwoot_team_public(item, m.local_uuid))
+                public_teams.append(_chatwoot_team_public(item, maps[cw_id].local_uuid))
             await db.commit()
             return api_response(
                 ResponseStatus.SUCCESS,
@@ -466,17 +455,15 @@ async def list_team_members(
                     {"tenant_id": str(tenant_id), "team_id": str(team_id), "members": data},
                 )
             public_members = []
-            for item in raw_list:
-                if not isinstance(item, dict) or item.get("id") is None:
+            cw_ids, parsed = _collect_chatwoot_ids(raw_list)
+            maps = await _ensure_tenant_agent_maps_bulk(db, tenant_id, cw_ids)
+            for item, cw_id in parsed:
+                if cw_id is None:
                     public_members.append(item)
                     continue
-                try:
-                    cw_id = int(item["id"])
-                except (TypeError, ValueError):
-                    public_members.append(item)
-                    continue
-                am = await _ensure_tenant_agent_map(db, tenant_id, cw_id)
-                public_members.append(_chatwoot_agent_public(item, am.local_uuid))
+                public_members.append(
+                    _chatwoot_agent_public(item, maps[cw_id].local_uuid)
+                )
             await db.commit()
             return api_response(
                 ResponseStatus.SUCCESS,
@@ -566,17 +553,15 @@ async def _modify_team_members(
                     {"tenant_id": str(tenant_id), "team_id": str(team_id), "members": data},
                 )
             public_members = []
-            for item in raw_list:
-                if not isinstance(item, dict) or item.get("id") is None:
+            cw_ids, parsed = _collect_chatwoot_ids(raw_list)
+            maps = await _ensure_tenant_agent_maps_bulk(db, tenant_id, cw_ids)
+            for item, cw_id in parsed:
+                if cw_id is None:
                     public_members.append(item)
                     continue
-                try:
-                    cw_id = int(item["id"])
-                except (TypeError, ValueError):
-                    public_members.append(item)
-                    continue
-                am = await _ensure_tenant_agent_map(db, tenant_id, cw_id)
-                public_members.append(_chatwoot_agent_public(item, am.local_uuid))
+                public_members.append(
+                    _chatwoot_agent_public(item, maps[cw_id].local_uuid)
+                )
             await db.commit()
             return api_response(
                 ResponseStatus.SUCCESS,
