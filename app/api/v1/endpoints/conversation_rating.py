@@ -2,12 +2,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from fastapi import Request
 from app.core.config.database import get_db
+from app.core.config.logging import log_user_action
 from app.core.dependencies.dependencies import get_current_user_dependency
 from app.core.security.permissions import has_permission
 from app.db.models import User
-from app.schemas.requests.conversation_rating import ConversationRatingSubmitBody
+from app.schemas.requests.conversation_rating import (
+    ConversationRatingSendBody,
+    ConversationRatingSubmitBody,
+)
 from app.services.v1 import handle_conversation_rating
 
 # Public (không JWT) — mount riêng trong main.py
@@ -61,4 +65,29 @@ async def list_tenant_ratings(
         page_size=page_size,
         status=status,
         channel=channel,
+    )
+
+
+@router.post("/tenants/{tenant_id}/conversations/{conversation_id}/send")
+@log_user_action("sendConversationRatingLink")
+async def send_conversation_rating_link(
+    request: Request,
+    tenant_id: UUID,
+    conversation_id: int,
+    body: ConversationRatingSendBody | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    _=Depends(has_permission("view_messaging_conversations")),
+):
+    """
+    Chủ động gửi link CSAT — chỉ nhân viên đang được gán conversation
+    (hoặc platform admin). Cần quyền xem conversation.
+    """
+    payload = body or ConversationRatingSendBody()
+    return await handle_conversation_rating.send_rating_manually(
+        db=db,
+        current_user=current_user,
+        tenant_id=tenant_id,
+        conversation_id=conversation_id,
+        force_resend=payload.force_resend,
     )

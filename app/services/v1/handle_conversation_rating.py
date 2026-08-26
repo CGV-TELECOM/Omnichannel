@@ -4,7 +4,6 @@ gửi link token, nhận submit public, list theo tenant.
 """
 
 from __future__ import annotations
-
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -16,15 +15,26 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config.app_config import settings
-from app.db.models import ConversationRating, ConversationRatingStatus, Tenant, User
+from app.db.models import (
+    ChatwootLegacyMap,
+    ChatwootMapResourceType,
+    ConversationRating,
+    ConversationRatingStatus,
+    Tenant,
+    User,
+)
 from app.integrations.chatwoot import client as chatwoot_client
 from app.schemas.responses.api_response_rule import (
     ResponseStatus,
     ResponseStatusCode,
     api_response,
 )
-from app.services.v1.handle_chatwoot._shared import _require_tenant_access
+from app.services.v1.handle_chatwoot._shared import (
+    _require_tenant_access,
+    _resolve_account_id,
+)
 from app.services.v1.handle_chatwoot.chatbot import send_chatwoot_reply
+from app.utils.helpers import is_platform_admin
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +422,7 @@ async def maybe_create_and_send_rating(
     inbox_id: int | None = None,
     agent_chatwoot_id: int | None = None,
     send_message: bool = True,
+    skip_throttle: bool = False,
 ) -> ConversationRating | None:
     """
     Khi resolve (đã xác nhận transition ở caller webhook):
@@ -484,7 +495,7 @@ async def maybe_create_and_send_rating(
             await db.refresh(latest)
             return latest
 
-        if _in_resolve_dedupe(latest, now):
+        if not skip_throttle and _in_resolve_dedupe(latest, now):
             logger.info(
                 "CSAT dedupe %.0fs — bỏ qua conv=%s (tránh double webhook/API)",
                 _resolve_dedupe_window().total_seconds(),
@@ -492,7 +503,7 @@ async def maybe_create_and_send_rating(
             )
             return latest
 
-        if _in_resend_cooldown(latest, now):
+        if not skip_throttle and _in_resend_cooldown(latest, now):
             logger.info(
                 "CSAT trong cooldown (%.2fh) — bỏ qua conv=%s tenant=%s last=%s",
                 _resend_cooldown().total_seconds() / 3600.0,
@@ -617,6 +628,228 @@ async def fetch_channel_and_send_on_resolve(
         )
     except Exception as e:
         logger.exception("CSAT: lỗi sau toggle_status: %s", e)
+
+
+async def _current_user_messaging_agent_id(
+    db: AsyncSession, current_user: User
+) -> int | None:
+    """Id agent messaging của user (assignee_id trên Chatwoot)."""
+    if current_user.chat_id is not None:
+        try:
+            return int(current_user.chat_id)
+        except (TypeError, ValueError):
+            pass
+    result = await db.execute(
+        select(ChatwootLegacyMap).where(
+            and_(
+                ChatwootLegacyMap.resource_type == ChatwootMapResourceType.USER,
+                ChatwootLegacyMap.local_uuid == current_user.id,
+            )
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return None
+    try:
+        return int(row.chatwoot_id)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _require_conversation_assignee(
+    db: AsyncSession,
+    current_user: User,
+    *,
+    assignee_chatwoot_id: int | None,
+) -> dict[str, Any] | None:
+    """
+    Chỉ agent đang được gán conversation mới được gửi CSAT thủ công.
+    Platform admin được bypass (ops).
+    Returns api_response error dict nếu bị từ chối, else None.
+    """
+    if await is_platform_admin(current_user, db):
+        return None
+
+    if assignee_chatwoot_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "Conversation chưa được gán nhân viên — chỉ người được gán mới gửi được link đánh giá",
+        )
+
+    my_agent_id = await _current_user_messaging_agent_id(db, current_user)
+    if my_agent_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "Tài khoản chưa đồng bộ agent messaging — không thể gửi link đánh giá",
+        )
+
+    if int(my_agent_id) != int(assignee_chatwoot_id):
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "Chỉ nhân viên đang được gán vào cuộc trò chuyện này mới gửi được link đánh giá",
+        )
+    return None
+
+
+async def send_rating_manually(
+    db: AsyncSession,
+    current_user: User,
+    *,
+    tenant_id: UUID,
+    conversation_id: int,
+    force_resend: bool = False,
+):
+    """
+    Agent chủ động gửi link CSAT qua messaging.
+    Chỉ người đang được assign conversation (hoặc platform admin).
+    Không yêu cầu conversation đã resolved.
+    """
+    denied = await _require_tenant_access(current_user, tenant_id, db)
+    if denied is not None:
+        return denied
+
+    if not await _tenant_allows_rating(db, tenant_id):
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "CSAT đã tắt trên tenant này",
+        )
+
+    account_id, _ = await _resolve_account_id(db, tenant_id)
+    if account_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.NOT_FOUND,
+            "Không tìm thấy messaging account cho tenant",
+        )
+
+    meta = await fetch_conversation_channel_meta(int(account_id), conversation_id)
+    channel = _norm_channel(meta.get("channel"))
+    if channel is None and not meta.get("inbox_id"):
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.NOT_FOUND,
+            "Không tìm thấy conversation trên messaging",
+        )
+    if channel and _is_web_widget_channel(channel):
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.BAD_REQUEST,
+            "Kênh web widget dùng CSAT native Chatwoot — không gửi link OmniHub",
+        )
+
+    assignee_id = meta.get("agent_chatwoot_id")
+    assignee_denied = await _require_conversation_assignee(
+        db,
+        current_user,
+        assignee_chatwoot_id=(
+            int(assignee_id) if assignee_id is not None else None
+        ),
+    )
+    if assignee_denied is not None:
+        return assignee_denied
+
+    if not (settings.PUBLIC_RATING_BASE_URL or "").strip():
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.SERVICE_UNAVAILABLE,
+            "Chưa cấu hình PUBLIC_RATING_BASE_URL — không thể tạo link đánh giá",
+        )
+
+    try:
+        latest_before = await _latest_rating_for_conversation(
+            db,
+            tenant_id=tenant_id,
+            messaging_account_id=int(account_id),
+            conversation_id=conversation_id,
+        )
+        row = await maybe_create_and_send_rating(
+            db,
+            tenant_id=tenant_id,
+            messaging_account_id=int(account_id),
+            conversation_id=conversation_id,
+            channel=channel,
+            inbox_id=int(meta["inbox_id"]) if meta.get("inbox_id") is not None else None,
+            agent_chatwoot_id=(
+                int(meta["agent_chatwoot_id"])
+                if meta.get("agent_chatwoot_id") is not None
+                else None
+            ),
+            send_message=True,
+            skip_throttle=force_resend,
+        )
+    except SQLAlchemyError as e:
+        await db.rollback()
+        logger.exception("send_rating_manually db: %s", e)
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Lỗi cơ sở dữ liệu khi gửi link đánh giá",
+        )
+    except Exception as e:
+        await db.rollback()
+        logger.exception("send_rating_manually: %s", e)
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Lỗi khi gửi link đánh giá",
+        )
+
+    if row is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.BAD_REQUEST,
+            "Không thể gửi link đánh giá cho conversation này",
+        )
+
+    now = datetime.now(timezone.utc)
+    if (
+        not force_resend
+        and latest_before is not None
+        and row.id == latest_before.id
+        and latest_before.sent_at is not None
+        and _in_resend_cooldown(latest_before, now)
+    ):
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.CONFLICT,
+            (
+                "Đã gửi link đánh giá gần đây. "
+                "Dùng force_resend=true để gửi lại."
+            ),
+            {
+                "rating": _rating_to_dict(latest_before),
+                "cooldown_hours": _resend_cooldown().total_seconds() / 3600.0,
+            },
+        )
+
+    if row.sent_at is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Tạo link thành công nhưng gửi tin nhắn messaging thất bại",
+            {"rating": _rating_to_dict(row)},
+        )
+
+    created_new = latest_before is None or row.id != latest_before.id
+    message = (
+        "Đã gửi link đánh giá mới cho khách hàng"
+        if created_new
+        else "Đã gửi lại link đánh giá cho khách hàng"
+    )
+    return api_response(
+        ResponseStatus.SUCCESS,
+        ResponseStatusCode.OK,
+        message,
+        {
+            "rating": _rating_to_dict(row),
+            "sent": True,
+            "created_new": created_new,
+        },
+    )
 
 
 async def get_rating_by_token(token: str, db: AsyncSession):
