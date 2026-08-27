@@ -25,6 +25,16 @@ def _sanitize_chatwoot_env(value: str | None) -> str | None:
     return s
 
 
+def _normalize_redis_url(raw: str | None) -> str:
+    """Đảm bảo REDIS_URL có scheme redis:// | rediss:// | unix://."""
+    s = (raw or "").strip().strip('"').strip("'")
+    if not s:
+        return "redis://127.0.0.1:6379"
+    if "://" not in s:
+        return f"redis://{s}"
+    return s
+
+
 def _optional_positive_int_env(var_name: str) -> int | None:
     """Số nguyên dương từ .env; rỗng / không hợp lệ → None."""
     raw = os.getenv(var_name)
@@ -46,7 +56,7 @@ class Settings:
     DATABASE_URL: str = os.getenv("DATABASE_URL")   
     RATE_LIMIT_WINDOW: int = os.getenv("RATE_LIMIT_WINDOW")
     RATE_LIMIT_LIMIT: int = os.getenv("RATE_LIMIT_LIMIT")
-    REDIS_URL: str = os.getenv("REDIS_URL")
+    REDIS_URL: str = _normalize_redis_url(os.getenv("REDIS_URL"))
     # Timezone Configuration - Default: Asia/Ho_Chi_Minh (UTC+7)
     TIMEZONE: str = os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh")
     # JWT
@@ -77,6 +87,8 @@ class Settings:
     # Link gửi khách = {PUBLIC_RATING_BASE_URL}/{token}
     PUBLIC_RATING_BASE_URL: str | None = os.getenv("PUBLIC_RATING_BASE_URL")
     RATING_TOKEN_EXPIRE_HOURS: int = int(os.getenv("RATING_TOKEN_EXPIRE_HOURS", "72"))
+    # Entropy cho token link CSAT (bytes). token_urlsafe(12) ≈ 16 ký tự URL; (32) ≈ 43 ký tự.
+    RATING_TOKEN_BYTES: int = int(os.getenv("RATING_TOKEN_BYTES", "12"))
     # Khoảng cách tối thiểu giữa 2 lần gửi CSAT cùng conversation (giờ).
     # VD 1: resolve lại trong < 1h → không gửi; >= 1h → gửi survey mới.
     # 0 = không cooldown (mỗi lần resolve đều được gửi nếu đủ điều kiện khác).

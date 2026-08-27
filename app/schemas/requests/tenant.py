@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Any, Literal, Optional
-from uuid import UUID  
+from uuid import UUID
+
 
 class GroupBase(BaseModel):
     name: Optional[str] = None
@@ -13,7 +14,9 @@ class GroupBase(BaseModel):
             "`/platform/api/v1/accounts` (ví dụ: `locale`, `domain`, `support_email`, `features`, `limits`, `custom_attributes`, ...).\n\n"
             "Cấu hình Chatbot:\n"
             "- `default_responder` (str): 'bot' hoặc 'agent' (mặc định phản hồi khi có chat mới).\n"
-            "- `chatbot_enabled` (bool): True hoặc False (bật/tắt tính năng chatbot).\n\n"
+            "- `chatbot_enabled` (bool): True hoặc False (bật/tắt tính năng chatbot).\n"
+            "- `messaging_bots` (list): danh sách bot theo `agent_uuid` (UUID map agent nội bộ). "
+            "Mặc định `[]` — tenant không dùng bot vẫn có field này; thêm phần tử khi bật AI Bot.\n\n"
             "- `features` sẽ được sanitize theo whitelist để tránh messaging 500/duplicate account.\n"
             "- Tương thích ngược: nếu có `meta_data.chatwoot_account` (dict) thì ưu tiên dùng phần đó."
         ),
@@ -24,6 +27,9 @@ class GroupBase(BaseModel):
                 "domain": "example.com",
                 "features": {"inbound_emails": True, "reports": True},
                 "custom_attributes": {"plan": "pro"},
+                "chatbot_enabled": True,
+                "default_responder": "agent",
+                "messaging_bots": [],
             }
         },
     )
@@ -59,18 +65,44 @@ class GroupBase(BaseModel):
         ),
     )
 
+
 class TenantCreate(GroupBase):
     pass
+
 
 class TenantUpdate(GroupBase):
     pass
 
+
 class TenantResponse(GroupBase):
-    id: Optional[UUID] = None  # sửa lại kiểu đúng
+    id: Optional[UUID] = None
     is_active: Optional[int] = None
 
     class Config:
-        from_attributes = True  # để serialize từ ORM
+        from_attributes = True
+
+
+class MessagingBotEntry(BaseModel):
+    """Một agent messaging được đánh dấu là AI Bot của tenant (lưu UUID map)."""
+
+    key: str = Field(
+        default="default",
+        max_length=64,
+        description="Key logic bot (default, sales_bot, ...).",
+    )
+    agent_uuid: UUID = Field(
+        ...,
+        description="UUID agent nội bộ (từ GET messaging agents / chatwoot_legacy_map).",
+    )
+    is_default: bool = Field(
+        default=False,
+        description="Bot dùng khi auto-assign / assign-bot. Chỉ một phần tử nên true.",
+    )
+    label: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description="Nhãn hiển thị (tuỳ chọn).",
+    )
 
 
 class TenantOwnSettingsUpdate(BaseModel):
@@ -86,7 +118,18 @@ class TenantOwnSettingsUpdate(BaseModel):
     )
     default_responder: Optional[Literal["bot", "agent"]] = Field(
         default=None,
-        description="Người trả lời mặc định khi có chat mới: bot hoặc agent.",
+        description=(
+            "Người trả lời mặc định khi có chat mới: bot hoặc agent. "
+            "Chỉ có hiệu lực auto-assign khi messaging_bots có ít nhất 1 bot is_default."
+        ),
+    )
+    messaging_bots: Optional[list[MessagingBotEntry]] = Field(
+        default=None,
+        description=(
+            "Danh sách agent được phép coi là bot (UUID map). "
+            "Gửi full list để thay thế; `[]` = tenant không dùng AI Bot. "
+            "Thêm nhiều bot sau này bằng cách bổ sung phần tử (một is_default)."
+        ),
     )
 
 
@@ -94,3 +137,4 @@ class TenantOwnSettingsResponse(BaseModel):
     conversation_rating_enabled: bool
     chatbot_enabled: bool
     default_responder: Literal["bot", "agent"]
+    messaging_bots: list[MessagingBotEntry] = Field(default_factory=list)

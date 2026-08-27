@@ -33,6 +33,15 @@ class RedisHelper:
         await redis.set(key, value, ex=expire_seconds)
 
     @staticmethod
+    async def set_nx(
+        key: str, value: str, expire_seconds: Optional[int] = None
+    ) -> bool:
+        """SET key chỉ khi chưa tồn tại. True = vừa claim được."""
+        redis = await RedisClient.get_instance()
+        ok = await redis.set(key, value, nx=True, ex=expire_seconds)
+        return bool(ok)
+
+    @staticmethod
     async def get_key(key: str) -> Optional[str]:
         redis = await RedisClient.get_instance()
         return await redis.get(key)

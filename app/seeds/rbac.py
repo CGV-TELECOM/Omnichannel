@@ -800,7 +800,11 @@ async def _get_or_create_tenant(db: AsyncSession, name: str, description: str) -
                 graph_activated=1,
                 agent_id=UUID("b10add77-0a1b-4974-9411-15ff68de61cd"),
                 graph_id=UUID("b10add77-0a1b-4974-9411-15ff68de61cd"),
-                meta_data={"chatbot_enabled": True, "default_responder": "bot"}
+                meta_data={
+                    "chatbot_enabled": True,
+                    "default_responder": "agent",
+                    "messaging_bots": [],
+                }
             )
             db.add(tenant)
             await db.commit()

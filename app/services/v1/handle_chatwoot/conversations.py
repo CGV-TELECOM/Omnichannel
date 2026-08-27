@@ -352,10 +352,11 @@ async def assign_conversation(
     body: ChatwootConversationAssignBody,
     db: AsyncSession,
 ):
-    print(f"Vào đây")
     """
     POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments
     — [Assign Conversation](https://developers.chatwoot.com/api-reference/conversation-assignments/assign-conversation).
+
+    Sau assign thành công: sync bot flags theo assignee (người → tắt bot, AI Bot → bật).
     """
     try:
         denied = await _require_tenant_access(current_user, tenant_id, db)
@@ -389,7 +390,6 @@ async def assign_conversation(
             if body.assignee_agent_uuid is None:
                 payload["team_id"] = tm.chatwoot_id
 
-        print(f"Check team_id: {body.team_id}")
         res = await chatwoot_client.application_request(
             "POST",
             f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments",
@@ -397,6 +397,31 @@ async def assign_conversation(
         )
         cw_map = await _chatwoot_agent_id_to_local_map(db, tenant_id)
         if res.status_code == 200 and isinstance(res.data, dict):
+            # Sync bot control ngay (không chờ webhook) — bot ids theo tenant
+            from app.services.v1.handle_chatwoot.chatbot import (
+                coerce_assignee_id,
+                sync_bot_flags_for_assignee,
+            )
+
+            assigned_id = payload.get("assignee_id")
+            if assigned_id is None and isinstance(res.data, dict):
+                assigned_id = coerce_assignee_id(res.data)
+            try:
+                await sync_bot_flags_for_assignee(
+                    db,
+                    tenant_id,
+                    int(account_id),
+                    int(conversation_id),
+                    coerce_assignee_id(assigned_id),
+                    send_note=True,
+                )
+            except Exception as sync_err:
+                logger.warning(
+                    "Sync bot flags sau assign thất bại conv=%s: %s",
+                    conversation_id,
+                    sync_err,
+                )
+
             out_data = _redact_chatwoot_agent_like_user(res.data, cw_map)
             return api_response(
                 ResponseStatus.SUCCESS,
@@ -423,6 +448,98 @@ async def assign_conversation(
             f"Lỗi CSDL: {e}",
         )
     except Exception as e:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi không xác định: {e}",
+        )
+
+
+async def assign_conversation_to_ai_bot(
+    current_user: User,
+    tenant_id: UUID,
+    conversation_id: int,
+    db: AsyncSession,
+):
+    """
+    Handback: giao lại conversation cho AI Bot mặc định của tenant
+    (messaging_bots is_default).
+    """
+    try:
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
+        account_id, _ = await _resolve_account_id(db, tenant_id)
+        if account_id is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Chưa có map messaging account cho tenant này",
+            )
+
+        from app.db.models import Tenant
+        from app.services.v1.handle_chatwoot.chatbot import (
+            assign_to_ai_bot,
+            default_bot_agent_uuid,
+            resolve_default_bot_chatwoot_id,
+        )
+
+        tenant = await db.get(Tenant, tenant_id)
+        if tenant is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Không tìm thấy tenant",
+            )
+
+        bot_cw_id = await resolve_default_bot_chatwoot_id(db, tenant)
+        if bot_cw_id is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.BAD_REQUEST,
+                (
+                    "Tenant chưa cấu hình AI Bot (messaging_bots trống hoặc thiếu "
+                    "is_default). Chọn agent từ GET messaging agents rồi PATCH "
+                    "/tenants/me/settings."
+                ),
+            )
+
+        ok, detail = await assign_to_ai_bot(
+            db,
+            tenant,
+            int(account_id),
+            int(conversation_id),
+            sync_flags=True,
+            send_note=True,
+        )
+        if not ok:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.INTERNAL_SERVER_ERROR
+                if detail.startswith("assign_failed")
+                else ResponseStatusCode.BAD_REQUEST,
+                "Assign AI Bot thất bại",
+                {"detail": detail},
+            )
+        meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+        return api_response(
+            ResponseStatus.SUCCESS,
+            ResponseStatusCode.OK,
+            "Đã giao conversation cho AI Bot",
+            {
+                "tenant_id": str(tenant_id),
+                "conversation_id": conversation_id,
+                "assignee_id": bot_cw_id,
+                "agent_uuid": (
+                    str(default_bot_agent_uuid(meta))
+                    if default_bot_agent_uuid(meta)
+                    else None
+                ),
+                "bot_active": True,
+            },
+        )
+    except Exception as e:
+        logger.exception("assign_conversation_to_ai_bot: %s", e)
         return api_response(
             ResponseStatus.ERROR,
             ResponseStatusCode.INTERNAL_SERVER_ERROR,

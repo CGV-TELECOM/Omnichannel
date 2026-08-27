@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from uuid import UUID
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,7 +72,6 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
             "Đang phát sự kiện messaging '%s' tới tenant %s", event_type, tenant_id
         )
 
-        # Ánh xạ agent ID trong payload sang UUID nội bộ
         cw_map = await _chatwoot_agent_id_to_local_map(db, tenant_id)
         mapped_payload = _walk_redact_agent_refs(payload, cw_map)
 
@@ -83,74 +81,142 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
             data={"event": event_type, "payload": mapped_payload},
         )
 
-        # 4. Xử lý logic Chatbot tích hợp
-        from app.db.models import Tenant
-        from app.core.config.app_config import settings
+        # 4. Bot control (assignee = nguồn sự thật)
         from app.services.v1.handle_chatwoot.chatbot import (
-            should_bot_respond,
-            call_kg_chatbot_core,
-            send_chatwoot_reply,
-            chatbot_enabled,
-            send_internal_note,
+            claim_and_reply_omnihub_kg,
+            coerce_assignee_id,
+            extract_assignee_id,
+            is_bot_assignee,
+            maybe_auto_assign_ai_bot,
+            sync_bot_flags_for_assignee,
         )
 
-        # Xử lý sự kiện tin nhắn mới (message_created)
-        if event_type == "message_created" and payload.get("message_type") == "incoming" and not payload.get("private"):
+        account_id_int = int(account_id)
+
+        # 4a. Conversation mới → auto-assign AI Bot (nếu policy tenant cho phép)
+        if event_type == "conversation_created":
+            conv = payload
+            if "conversation" in payload and isinstance(payload["conversation"], dict):
+                conv = payload["conversation"]
+            conversation_id = conv.get("id") or payload.get("id")
+            if conversation_id is not None:
+                ok, detail = await maybe_auto_assign_ai_bot(
+                    db,
+                    tenant_id=tenant_id,
+                    account_id=account_id_int,
+                    conversation_id=int(conversation_id),
+                    conversation_payload=conv if isinstance(conv, dict) else {},
+                )
+                logger.info(
+                    "Auto-assign AI Bot conv=%s ok=%s detail=%s",
+                    conversation_id,
+                    ok,
+                    detail,
+                )
+
+        # 4b. Tin khách → Reply Gate OmniHub KG
+        elif (
+            event_type == "message_created"
+            and payload.get("message_type") == "incoming"
+            and not payload.get("private")
+        ):
             conversation_payload = payload.get("conversation") or {}
             conversation_id = conversation_payload.get("id")
             message_content = payload.get("content") or ""
+            message_id = payload.get("id")
 
-            if conversation_id:
-                bot_should_reply = await should_bot_respond(db, tenant_id, conversation_payload)
-                if bot_should_reply:
-                    tenant = await db.get(Tenant, tenant_id)
-                    if tenant and tenant.agent_id:
-                        session_id = conversation_payload.get("uuid") or str(conversation_id)
-                        reply_text = await call_kg_chatbot_core(
-                            tenant_id=tenant_id,
-                            agent_id=tenant.agent_id,
-                            session_id=session_id,
-                            message_content=message_content,
-                        )
-                        if reply_text:
-                            await send_chatwoot_reply(
-                                account_id=int(account_id),
-                                conversation_id=conversation_id,
-                                reply_text=reply_text,
-                            )
+            if conversation_id and message_content:
+                if extract_assignee_id(conversation_payload) is None:
+                    await maybe_auto_assign_ai_bot(
+                        db,
+                        tenant_id=tenant_id,
+                        account_id=account_id_int,
+                        conversation_id=int(conversation_id),
+                        conversation_payload=conversation_payload,
+                    )
+                    from app.services.v1.handle_chatwoot.chatbot import (
+                        fetch_conversation_assignee_id,
+                    )
 
-        # Xử lý sự kiện cuộc hội thoại được cập nhật (conversation_updated) để tự động tắt bot
+                    aid = await fetch_conversation_assignee_id(
+                        account_id_int, int(conversation_id)
+                    )
+                    if aid is not None:
+                        conversation_payload = {
+                            **conversation_payload,
+                            "assignee": {"id": aid},
+                        }
+
+                await claim_and_reply_omnihub_kg(
+                    db,
+                    tenant_id=tenant_id,
+                    account_id=account_id_int,
+                    conversation_id=int(conversation_id),
+                    conversation_payload=conversation_payload,
+                    message_content=message_content,
+                    message_id=message_id,
+                )
+
+        # 4c. Assignee đổi → sync bot flags (backup nếu assign ngoài OmniHub)
         elif event_type == "conversation_updated":
             conversation_payload = payload
             if "conversation" in payload and isinstance(payload["conversation"], dict):
                 conversation_payload = payload["conversation"]
 
-            assignee = conversation_payload.get("assignee")
             conversation_id = conversation_payload.get("id")
+            assignee_id = extract_assignee_id(conversation_payload)
 
-            if conversation_id and assignee is not None:
-                assignee_id = assignee.get("id")
-                integration_bot_id = settings.CHATWOOT_INTEGRATION_USER_ID
+            changed = payload.get("changed_attributes") or []
+            assignee_changed = False
+            if isinstance(changed, list):
+                for item in changed:
+                    if not isinstance(item, dict):
+                        continue
+                    if "assignee_id" in item or "assignee" in item:
+                        assignee_changed = True
+                        break
+                    attr = str(item.get("attribute_name") or item.get("name") or "")
+                    if attr in ("assignee_id", "assignee"):
+                        assignee_changed = True
+                        break
 
-                # Nếu được gán cho nhân viên thật (không phải Bot và không phải rỗng)
-                if assignee_id is not None and assignee_id != integration_bot_id:
-                    custom_attrs = conversation_payload.get("custom_attributes") or {}
-                    labels = conversation_payload.get("labels") or []
-                    
-                    # Nếu bot chưa bị tắt
-                    if custom_attrs.get("is_bot_active") is not False and "bot-disabled" not in labels:
-                        await chatbot_enabled(
-                            account_id=int(account_id),
-                            conversation_id=conversation_id,
-                            is_active=False,
+            if conversation_id is not None and (
+                assignee_changed or assignee_id is not None
+            ):
+                custom_attrs = conversation_payload.get("custom_attributes") or {}
+                labels = conversation_payload.get("labels") or []
+                if not isinstance(labels, list):
+                    labels = []
+
+                aid = coerce_assignee_id(assignee_id)
+                if await is_bot_assignee(db, tenant_id, aid):
+                    if (
+                        custom_attrs.get("is_bot_active") is not True
+                        and "bot-active" not in labels
+                    ):
+                        await sync_bot_flags_for_assignee(
+                            db,
+                            tenant_id,
+                            account_id_int,
+                            int(conversation_id),
+                            aid,
+                            send_note=False,
                         )
-                        await send_internal_note(
-                            account_id=int(account_id),
-                            conversation_id=conversation_id,
-                            note_text="Nhân viên hỗ trợ đã tiếp nhận. Bot tự động tạm dừng.",
+                elif aid is not None:
+                    if (
+                        custom_attrs.get("is_bot_active") is not False
+                        and "bot-disabled" not in labels
+                    ):
+                        await sync_bot_flags_for_assignee(
+                            db,
+                            tenant_id,
+                            account_id_int,
+                            int(conversation_id),
+                            aid,
+                            send_note=True,
                         )
 
-        # CSAT: chỉ khi status chuyển → resolved (không chạy mọi conversation_updated)
+        # CSAT: chỉ khi status chuyển → resolved
         if event_type in ("conversation_status_changed", "conversation_updated"):
             from app.services.v1.handle_conversation_rating import (
                 handle_resolved_conversation_payload,
@@ -159,7 +225,7 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
             await handle_resolved_conversation_payload(
                 db,
                 tenant_id=tenant_id,
-                messaging_account_id=int(account_id),
+                messaging_account_id=account_id_int,
                 payload=payload,
                 event_type=event_type,
             )

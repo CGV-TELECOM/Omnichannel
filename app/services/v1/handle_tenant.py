@@ -229,9 +229,12 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
                 "Đã tồn tại tên tenant này rồi, vui lòng kiểm tra lại"
             )  
 
-        meta = {"chatbot_enabled": True, "default_responder": "bot"}
+        meta = {"chatbot_enabled": True, "default_responder": "agent", "messaging_bots": []}
         if tenant_data.meta_data and isinstance(tenant_data.meta_data, dict):
             meta.update(tenant_data.meta_data)
+        from app.services.v1.handle_chatwoot.chatbot import normalize_messaging_bots_meta
+
+        meta, _ = normalize_messaging_bots_meta(meta)
 
         # Tạo tenant mới
         new_tenant = Tenant(
@@ -572,21 +575,65 @@ async def deleteTenant(tenant_id: UUID, current_user: User, request, db: AsyncSe
         )
 
 
-_DEFAULT_RESPONDER: Literal["bot", "agent"] = "bot"
+_DEFAULT_RESPONDER: Literal["bot", "agent"] = "agent"
 
 
 def _tenant_own_settings_payload(tenant: Tenant) -> TenantOwnSettingsResponse:
+    from app.services.v1.handle_chatwoot.chatbot import parse_tenant_messaging_bots
+
     meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
     responder = meta.get("default_responder", _DEFAULT_RESPONDER)
     if responder not in ("bot", "agent"):
         responder = _DEFAULT_RESPONDER
+    bots = parse_tenant_messaging_bots(meta)
     return TenantOwnSettingsResponse(
         conversation_rating_enabled=bool(
             getattr(tenant, "conversation_rating_enabled", True)
         ),
         chatbot_enabled=meta.get("chatbot_enabled") is not False,
         default_responder=responder,
+        messaging_bots=bots,
     )
+
+
+async def _ensure_messaging_bots_normalized(
+    db: AsyncSession, tenant: Tenant
+) -> Tenant:
+    """Lazy migrate: luôn có messaging_bots (có thể []); bỏ shorthand legacy."""
+    from app.services.v1.handle_chatwoot.chatbot import normalize_messaging_bots_meta
+
+    meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+    new_meta, changed = normalize_messaging_bots_meta(meta)
+    if not changed:
+        return tenant
+    tenant.meta_data = new_meta
+    flag_modified(tenant, "meta_data")
+    await db.commit()
+    await db.refresh(tenant)
+    return tenant
+
+
+async def _validate_messaging_bot_agent_uuids(
+    db: AsyncSession,
+    tenant_id: UUID,
+    agent_uuids: list[UUID],
+) -> str | None:
+    """None nếu OK; message lỗi nếu UUID không map được."""
+    if not agent_uuids:
+        return None
+    from app.services.v1.handle_chatwoot._shared import (
+        _translate_local_agent_uuids_to_remote,
+    )
+
+    _remote, missing = await _translate_local_agent_uuids_to_remote(
+        db, tenant_id, agent_uuids
+    )
+    if missing:
+        return (
+            "Agent UUID chưa có map messaging (gọi GET agents trước): "
+            + ", ".join(missing)
+        )
+    return None
 
 
 async def _require_own_tenant(current_user: User, db: AsyncSession):
@@ -611,6 +658,7 @@ async def getOwnTenantSettings(current_user: User, db: AsyncSession):
         tenant = await _require_own_tenant(current_user, db)
         if not isinstance(tenant, Tenant):
             return tenant
+        tenant = await _ensure_messaging_bots_normalized(db, tenant)
         return api_response(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,
@@ -642,6 +690,7 @@ async def updateOwnTenantSettings(
 
         updates = settings_data.model_dump(exclude_unset=True)
         if not updates:
+            tenant = await _ensure_messaging_bots_normalized(db, tenant)
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
@@ -654,14 +703,75 @@ async def updateOwnTenantSettings(
                 updates["conversation_rating_enabled"]
             )
 
-        if "chatbot_enabled" in updates or "default_responder" in updates:
+        meta_keys = ("chatbot_enabled", "default_responder", "messaging_bots")
+        if any(k in updates for k in meta_keys):
+            from app.services.v1.handle_chatwoot.chatbot import (
+                messaging_bots_to_meta_list,
+                normalize_messaging_bots_meta,
+            )
+            from app.schemas.requests.tenant import MessagingBotEntry
+
             meta = dict(tenant.meta_data) if isinstance(tenant.meta_data, dict) else {}
+            meta, _ = normalize_messaging_bots_meta(meta)
+
             if "chatbot_enabled" in updates:
                 meta["chatbot_enabled"] = bool(updates["chatbot_enabled"])
             if "default_responder" in updates:
                 meta["default_responder"] = updates["default_responder"]
+
+            if "messaging_bots" in updates:
+                bots_raw = updates["messaging_bots"] or []
+                entries: list[MessagingBotEntry] = []
+                uuids: list[UUID] = []
+                for item in bots_raw:
+                    if isinstance(item, MessagingBotEntry):
+                        entry = item
+                    elif isinstance(item, dict):
+                        entry = MessagingBotEntry.model_validate(item)
+                    else:
+                        entry = MessagingBotEntry.model_validate(
+                            {
+                                "key": getattr(item, "key", "default"),
+                                "agent_uuid": getattr(item, "agent_uuid"),
+                                "is_default": getattr(item, "is_default", False),
+                                "label": getattr(item, "label", None),
+                            }
+                        )
+                    entries.append(entry)
+                    uuids.append(entry.agent_uuid)
+
+                err = await _validate_messaging_bot_agent_uuids(
+                    db, tenant.id, uuids
+                )
+                if err:
+                    return api_response(
+                        ResponseStatus.ERROR,
+                        ResponseStatusCode.BAD_REQUEST,
+                        err,
+                    )
+                if entries and not any(e.is_default for e in entries):
+                    entries[0].is_default = True
+                elif sum(1 for e in entries if e.is_default) > 1:
+                    seen = False
+                    for e in entries:
+                        if e.is_default:
+                            if seen:
+                                e.is_default = False
+                            else:
+                                seen = True
+
+                meta["messaging_bots"] = messaging_bots_to_meta_list(entries)
+                meta.pop("messaging_ai_bot_agent_uuid", None)
+
+                # Có bot + chưa set responder → bot; list rỗng → giữ responder hiện tại
+                if entries and "default_responder" not in updates:
+                    if meta.get("default_responder") not in ("bot", "agent"):
+                        meta["default_responder"] = "bot"
+
             tenant.meta_data = meta
             flag_modified(tenant, "meta_data")
+        else:
+            await _ensure_messaging_bots_normalized(db, tenant)
 
         await db.commit()
         await db.refresh(tenant)

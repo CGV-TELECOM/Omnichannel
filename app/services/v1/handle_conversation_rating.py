@@ -340,6 +340,12 @@ async def resolve_channel_or_skip(
     return ch, meta
 
 
+def _generate_rating_token() -> str:
+    """Token ngắn, URL-safe; đủ entropy cho link có hạn dùng (mặc định ~16 ký tự)."""
+    nbytes = max(8, min(int(settings.RATING_TOKEN_BYTES or 12), 48))
+    return secrets.token_urlsafe(nbytes)[:64]
+
+
 def _rating_public_url(token: str) -> str | None:
     base = (settings.PUBLIC_RATING_BASE_URL or "").strip().rstrip("/")
     if not base:
@@ -514,7 +520,7 @@ async def maybe_create_and_send_rating(
             return latest
 
     expire_hours = max(1, int(settings.RATING_TOKEN_EXPIRE_HOURS or 72))
-    token = secrets.token_urlsafe(32)[:64]
+    token = _generate_rating_token()
     rating_url = _rating_public_url(token)
 
     row = ConversationRating(

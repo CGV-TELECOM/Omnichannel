@@ -36,6 +36,7 @@ from app.services.v1.handle_chatwoot.agents import (
 )
 from app.services.v1.handle_chatwoot.conversations import (
     assign_conversation,
+    assign_conversation_to_ai_bot,
     create_label,
     create_conversation,
     create_conversation_message,
@@ -86,6 +87,7 @@ __all__ = [
     "handle_webhook",
 
     "assign_conversation",
+    "assign_conversation_to_ai_bot",
     "create_agent",
     "create_account_agent_bot",
     "create_agent_bot",

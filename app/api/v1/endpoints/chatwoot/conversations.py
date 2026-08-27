@@ -349,6 +349,24 @@ async def assign_tenant_conversation(
     )
 
 
+@router.post("/tenants/{tenant_id}/conversations/{conversation_id}/assign-bot")
+@log_user_action("chatwootAssignConversationToAiBot")
+async def assign_tenant_conversation_to_ai_bot(
+    tenant_id: UUID,
+    conversation_id: int,
+    _=Depends(has_permission("assign_messaging_conversation")),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """
+    Giao lại conversation cho AI Bot (handback).
+    Bot sẽ trả lời các tin khách tiếp theo nếu chatbot_enabled.
+    """
+    return await handle_chatwoot.assign_conversation_to_ai_bot(
+        current_user, tenant_id, conversation_id, db
+    )
+
+
 @router.get("/tenants/{tenant_id}/conversations/{conversation_id}/attachments")
 async def list_tenant_conversation_attachments(
     request: Request,
