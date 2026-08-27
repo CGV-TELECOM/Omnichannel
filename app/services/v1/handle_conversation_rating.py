@@ -346,6 +346,20 @@ def _generate_rating_token() -> str:
     return secrets.token_urlsafe(nbytes)[:64]
 
 
+async def _allocate_unique_rating_token(db: AsyncSession) -> str:
+    """Sinh token unique; retry nếu trùng (hiếm với 12 bytes)."""
+    for _ in range(8):
+        token = _generate_rating_token()
+        exists = await db.execute(
+            select(ConversationRating.id)
+            .where(ConversationRating.token == token)
+            .limit(1)
+        )
+        if exists.scalar_one_or_none() is None:
+            return token
+    raise RuntimeError("Không sinh được rating token unique sau nhiều lần thử")
+
+
 def _rating_public_url(token: str) -> str | None:
     base = (settings.PUBLIC_RATING_BASE_URL or "").strip().rstrip("/")
     if not base:
@@ -520,7 +534,7 @@ async def maybe_create_and_send_rating(
             return latest
 
     expire_hours = max(1, int(settings.RATING_TOKEN_EXPIRE_HOURS or 72))
-    token = _generate_rating_token()
+    token = await _allocate_unique_rating_token(db)
     rating_url = _rating_public_url(token)
 
     row = ConversationRating(
@@ -817,7 +831,10 @@ async def send_rating_manually(
         and latest_before is not None
         and row.id == latest_before.id
         and latest_before.sent_at is not None
-        and _in_resend_cooldown(latest_before, now)
+        and (
+            _in_resend_cooldown(latest_before, now)
+            or _in_resolve_dedupe(latest_before, now)
+        )
     ):
         return api_response(
             ResponseStatus.ERROR,
@@ -829,6 +846,7 @@ async def send_rating_manually(
             {
                 "rating": _rating_to_dict(latest_before),
                 "cooldown_hours": _resend_cooldown().total_seconds() / 3600.0,
+                "dedupe_seconds": _resolve_dedupe_window().total_seconds(),
             },
         )
 
@@ -906,7 +924,9 @@ async def submit_rating(token: str, score: int, comment: str | None, db: AsyncSe
     """Public: nộp điểm 1–5."""
     try:
         result = await db.execute(
-            select(ConversationRating).where(ConversationRating.token == token)
+            select(ConversationRating)
+            .where(ConversationRating.token == token)
+            .with_for_update()
         )
         row = result.scalar_one_or_none()
         if not row:

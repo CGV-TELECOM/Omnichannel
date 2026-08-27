@@ -230,7 +230,8 @@ File chính: `app/services/v1/handle_chatwoot/chatbot.py`
 | `claim_and_reply_omnihub_kg` | Reply Gate + idempotency theo `message_id` |
 | `assign_to_ai_bot` | Assign default bot của tenant |
 
-Thứ tự `should_bot_respond`: tenant policy → soft disable → assignee ∈ bot ids tenant → true.
+Thứ tự `should_bot_respond`: tenant policy → assignee ∈ bot ids tenant → true.  
+Label `bot-disabled` / `is_bot_active` **không** chặn khi assignee đã là AI Bot.
 
 ---
 

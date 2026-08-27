@@ -417,14 +417,8 @@ async def should_bot_respond(
     if not chatbot_enabled_flag:
         return False, "chatbot_disabled_tenant"
 
-    custom_attrs = conversation_payload.get("custom_attributes") or {}
-    labels = conversation_payload.get("labels") or []
-    if not isinstance(labels, list):
-        labels = []
-
-    if "bot-disabled" in labels or custom_attrs.get("is_bot_active") is False:
-        return False, "bot_flag_disabled"
-
+    # Assignee = nguồn sự thật. Label/attr soft (bot-disabled) chỉ UI — không chặn
+    # khi conversation đang assign AI Bot (tránh stale flag sau handback).
     conversation_id = conversation_payload.get("id")
     assignee_id = extract_assignee_id(conversation_payload)
 
@@ -735,12 +729,33 @@ async def send_chatwoot_reply(
     return True
 
 
+_BOT_LABELS = frozenset({"bot-active", "bot-disabled"})
+
+
+def _normalize_label_list(raw: Any) -> list[str]:
+    if isinstance(raw, dict):
+        raw = raw.get("payload") or raw.get("labels") or raw.get("data") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            s = item.strip()
+            if s:
+                out.append(s)
+        elif isinstance(item, dict):
+            title = item.get("title") or item.get("name") or item.get("label")
+            if title:
+                out.append(str(title).strip())
+    return out
+
+
 async def chatbot_enabled(
     account_id: int,
     conversation_id: int,
     is_active: bool,
 ):
-    """Cập nhật is_bot_active + label bot-active / bot-disabled trên messaging."""
+    """Cập nhật is_bot_active + merge label bot-active / bot-disabled (không wipe label khác)."""
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
     payload = {"custom_attributes": {"is_bot_active": is_active}}
     await chatwoot_client.application_request("PUT", path, json_body=payload)
@@ -748,9 +763,29 @@ async def chatbot_enabled(
     labels_path = (
         f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/labels"
     )
-    labels = ["bot-active"] if is_active else ["bot-disabled"]
+    existing: list[str] = []
+    try:
+        res = await chatwoot_client.application_request("GET", labels_path)
+        if res.status_code == 200:
+            existing = _normalize_label_list(res.data)
+    except Exception:
+        logger.exception(
+            "GET conversation labels thất bại conv=%s — merge với list trống",
+            conversation_id,
+        )
+
+    merged = [lab for lab in existing if lab not in _BOT_LABELS]
+    merged.append("bot-active" if is_active else "bot-disabled")
+    # giữ thứ tự ổn định, bỏ trùng
+    seen: set[str] = set()
+    unique: list[str] = []
+    for lab in merged:
+        if lab not in seen:
+            seen.add(lab)
+            unique.append(lab)
+
     await chatwoot_client.application_request(
-        "POST", labels_path, json_body={"labels": labels}
+        "POST", labels_path, json_body={"labels": unique}
     )
 
 

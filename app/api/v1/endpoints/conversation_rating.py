@@ -1,16 +1,23 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import Request
+
 from app.core.config.database import get_db
 from app.core.config.logging import log_user_action
 from app.core.dependencies.dependencies import get_current_user_dependency
+from app.core.redis.redis_config import RedisHelper
 from app.core.security.permissions import has_permission
 from app.db.models import User
 from app.schemas.requests.conversation_rating import (
     ConversationRatingSendBody,
     ConversationRatingSubmitBody,
+)
+from app.schemas.responses.api_response_rule import (
+    ResponseStatus,
+    ResponseStatusCode,
+    api_response,
 )
 from app.services.v1 import handle_conversation_rating
 
@@ -20,13 +27,41 @@ public_router = APIRouter(prefix="/ratings", tags=["Conversation Ratings"])
 # Protected
 router = APIRouter(prefix="/conversation-ratings", tags=["Conversation Ratings"])
 
+_PUBLIC_RATING_RATE_LIMIT = 30
+_PUBLIC_RATING_RATE_WINDOW = 60
+
+
+async def _enforce_public_rating_rate_limit(request: Request):
+    """Giới hạn spam/probe token trên API public CSAT."""
+    client = request.client.host if request.client else "unknown"
+    key = f"rate:public_rating:{client}"
+    try:
+        n = await RedisHelper.increment(key, expire_seconds=_PUBLIC_RATING_RATE_WINDOW)
+    except Exception:
+        # Redis down → không chặn form khách
+        return None
+    if n > _PUBLIC_RATING_RATE_LIMIT:
+        return JSONResponse(
+            status_code=429,
+            content=api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.TOMANY_REQUESTS,
+                "Quá nhiều yêu cầu. Vui lòng thử lại sau.",
+            ),
+        )
+    return None
+
 
 @public_router.get("/{token}")
 async def get_public_rating(
     token: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Khách mở link đánh giá — lấy trạng thái form."""
+    limited = await _enforce_public_rating_rate_limit(request)
+    if limited is not None:
+        return limited
     return await handle_conversation_rating.get_rating_by_token(token, db)
 
 
@@ -34,9 +69,13 @@ async def get_public_rating(
 async def submit_public_rating(
     token: str,
     body: ConversationRatingSubmitBody,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """Khách gửi điểm 1–5 (+ comment)."""
+    limited = await _enforce_public_rating_rate_limit(request)
+    if limited is not None:
+        return limited
     return await handle_conversation_rating.submit_rating(
         token=token,
         score=body.score,
