@@ -86,10 +86,38 @@ def extract_assignee_id(payload: dict[str, Any] | None) -> int | None:
         aid = coerce_assignee_id(node)
         if aid is not None:
             return aid
+    # message_created: đôi khi assignee_id nằm trong messages[].conversation
+    messages = payload.get("messages")
+    if isinstance(messages, list):
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            nested = msg.get("conversation")
+            if isinstance(nested, dict):
+                aid = coerce_assignee_id(nested.get("assignee_id"))
+                if aid is not None:
+                    return aid
+                aid = extract_assignee_id(nested)
+                if aid is not None:
+                    return aid
     conv = payload.get("conversation")
     if isinstance(conv, dict):
         return extract_assignee_id(conv)
     return None
+
+
+def is_incoming_customer_message(payload: dict[str, Any] | None) -> bool:
+    """Chatwoot gửi message_type là 'incoming' hoặc 0; bỏ private."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("private"):
+        return False
+    mt = payload.get("message_type")
+    if mt in (0, "0", "incoming", "Incoming"):
+        return True
+    if isinstance(mt, str) and mt.strip().lower() == "incoming":
+        return True
+    return False
 
 
 async def fetch_conversation_assignee_id(
@@ -563,18 +591,7 @@ async def claim_and_reply_omnihub_kg(
     message_id: Any = None,
 ) -> tuple[bool, str]:
     """Reply Gate (OmniHub KG): chỉ gửi khi assignee vẫn là bot của tenant."""
-    claimed, claim_reason = await _claim_incoming_message_for_reply(
-        account_id, message_id
-    )
-    if not claimed:
-        logger.info(
-            "Bot skip reply conv=%s msg=%s reason=%s",
-            conversation_id,
-            message_id,
-            claim_reason,
-        )
-        return False, claim_reason
-
+    # Gate trước — không claim Redis cho tin human/unassigned (tránh chặn retry hữu ích)
     allowed, reason = await should_bot_respond(
         db,
         tenant_id,
@@ -591,8 +608,21 @@ async def claim_and_reply_omnihub_kg(
         )
         return False, reason
 
+    claimed, claim_reason = await _claim_incoming_message_for_reply(
+        account_id, message_id
+    )
+    if not claimed:
+        logger.info(
+            "Bot skip reply conv=%s msg=%s reason=%s",
+            conversation_id,
+            message_id,
+            claim_reason,
+        )
+        return False, claim_reason
+
     tenant = await db.get(Tenant, tenant_id)
     if not tenant or not tenant.agent_id:
+        await _release_incoming_message_claim(account_id, message_id)
         return False, "tenant_agent_missing"
 
     session_id = conversation_payload.get("uuid") or str(conversation_id)

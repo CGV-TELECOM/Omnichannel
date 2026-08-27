@@ -606,6 +606,11 @@ async def handle_resolved_conversation_payload(
     agent_id = None
     if isinstance(assignee, dict):
         agent_id = assignee.get("id")
+    # Prefer nested assignee_id nếu có (tránh UUID sau redact / shape lệch)
+    if isinstance(conv, dict) and conv.get("assignee_id") is not None:
+        agent_id = conv.get("assignee_id")
+
+    from app.services.v1.handle_chatwoot.chatbot import coerce_assignee_id
 
     try:
         await maybe_create_and_send_rating(
@@ -615,7 +620,7 @@ async def handle_resolved_conversation_payload(
             conversation_id=int(conversation_id),
             channel=channel,
             inbox_id=int(inbox_id) if inbox_id is not None else None,
-            agent_chatwoot_id=int(agent_id) if agent_id is not None else None,
+            agent_chatwoot_id=coerce_assignee_id(agent_id),
         )
     except Exception as e:
         logger.exception("CSAT: lỗi khi tạo/gửi rating: %s", e)

@@ -492,6 +492,17 @@ async def assign_conversation_to_ai_bot(
                 "Không tìm thấy tenant",
             )
 
+        meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+        if meta.get("chatbot_enabled") is False:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.BAD_REQUEST,
+                (
+                    "Chatbot đang tắt (chatbot_enabled=false). "
+                    "Bật lại trong PATCH /tenants/me/settings trước khi giao cho bot."
+                ),
+            )
+
         bot_cw_id = await resolve_default_bot_chatwoot_id(db, tenant)
         if bot_cw_id is None:
             return api_response(
@@ -521,7 +532,6 @@ async def assign_conversation_to_ai_bot(
                 "Assign AI Bot thất bại",
                 {"detail": detail},
             )
-        meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
         return api_response(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,

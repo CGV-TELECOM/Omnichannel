@@ -87,6 +87,7 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
             coerce_assignee_id,
             extract_assignee_id,
             is_bot_assignee,
+            is_incoming_customer_message,
             maybe_auto_assign_ai_bot,
             sync_bot_flags_for_assignee,
         )
@@ -115,14 +116,14 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                 )
 
         # 4b. Tin khách → Reply Gate OmniHub KG
-        elif (
-            event_type == "message_created"
-            and payload.get("message_type") == "incoming"
-            and not payload.get("private")
-        ):
+        elif event_type == "message_created" and is_incoming_customer_message(payload):
             conversation_payload = payload.get("conversation") or {}
-            conversation_id = conversation_payload.get("id")
-            message_content = payload.get("content") or ""
+            if not isinstance(conversation_payload, dict):
+                conversation_payload = {}
+            conversation_id = conversation_payload.get("id") or payload.get(
+                "conversation_id"
+            )
+            message_content = (payload.get("content") or "").strip()
             message_id = payload.get("id")
 
             if conversation_id and message_content:
@@ -145,6 +146,7 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                         conversation_payload = {
                             **conversation_payload,
                             "assignee": {"id": aid},
+                            "assignee_id": aid,
                         }
 
                 await claim_and_reply_omnihub_kg(
@@ -180,9 +182,8 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                         assignee_changed = True
                         break
 
-            if conversation_id is not None and (
-                assignee_changed or assignee_id is not None
-            ):
+            # Chỉ sync khi assignee thực sự đổi — tránh spam label API trên mọi update
+            if conversation_id is not None and assignee_changed:
                 custom_attrs = conversation_payload.get("custom_attributes") or {}
                 labels = conversation_payload.get("labels") or []
                 if not isinstance(labels, list):
