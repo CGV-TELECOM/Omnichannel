@@ -84,13 +84,77 @@ async def submit_public_rating(
     )
 
 
+@router.get("/tenants/{tenant_id}/metrics")
+async def get_tenant_ratings_metrics(
+    tenant_id: UUID,
+    since: str | None = Query(
+        None, description="Lọc từ (unix giây hoặc ISO datetime) theo created_at"
+    ),
+    until: str | None = Query(None, description="Lọc đến (unix giây hoặc ISO datetime)"),
+    channel: str | None = Query(None, description="Channel::Api, Channel::WebWidget, …"),
+    inbox_id: int | None = Query(None, description="Chỉ metrics của 1 inbox"),
+    agent_chatwoot_id: int | None = Query(None, description="Lọc theo agent messaging"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    _=Depends(has_permission("view_messaging_conversations")),
+):
+    """
+    CSAT OmniHub — tổng hợp (shape gần Chatwoot) + `by_inbox` theo từng kênh/inbox.
+    """
+    return await handle_conversation_rating.get_ratings_metrics(
+        db=db,
+        current_user=current_user,
+        tenant_id=tenant_id,
+        since=since,
+        until=until,
+        channel=channel,
+        inbox_id=inbox_id,
+        agent_chatwoot_id=agent_chatwoot_id,
+    )
+
+
+@router.get("/tenants/{tenant_id}/responses")
+async def list_tenant_rating_responses(
+    tenant_id: UUID,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    status: str | None = Query(
+        "submitted",
+        description="pending | submitted | expired — mặc định submitted như Chatwoot",
+    ),
+    channel: str | None = Query(None),
+    inbox_id: int | None = Query(None),
+    agent_chatwoot_id: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+    _=Depends(has_permission("view_messaging_conversations")),
+):
+    """Danh sách chi tiết CSAT OmniHub — `data.messaging[]` gần Chatwoot + inbox/source."""
+    return await handle_conversation_rating.list_rating_responses(
+        db=db,
+        current_user=current_user,
+        tenant_id=tenant_id,
+        page=page,
+        page_size=page_size,
+        since=since,
+        until=until,
+        status=status,
+        channel=channel,
+        inbox_id=inbox_id,
+        agent_chatwoot_id=agent_chatwoot_id,
+    )
+
+
 @router.get("/tenants/{tenant_id}")
 async def list_tenant_ratings(
     tenant_id: UUID,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = Query(None, description="pending | submitted | expired"),
-    channel: str | None = Query(None),
+    channel: str | None = Query(None, description="Channel::Api, Channel::WebWidget, …"),
+    inbox_id: int | None = Query(None, description="Lọc theo inbox messaging (nguồn cụ thể)"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_dependency),
     _=Depends(has_permission("view_messaging_conversations")),
@@ -104,6 +168,7 @@ async def list_tenant_ratings(
         page_size=page_size,
         status=status,
         channel=channel,
+        inbox_id=inbox_id,
     )
 
 

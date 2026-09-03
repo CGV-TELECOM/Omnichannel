@@ -455,8 +455,25 @@ async def get_current_user_or_none(request, db : AsyncSession):
             include_webcall=True,
         )
         user_data["graph_id"] = tenant.graph_id if tenant else None
-        user_data["agent_id"] = tenant.agent_id if tenant else None
         user_data["graph_activated"] = tenant.graph_activated if tenant else None
+        if tenant:
+            from app.services.v1.handle_tenant_kg_agent import (
+                kg_agent_row_to_response,
+                load_tenant_kg_agents,
+                resolve_default_kg_agent_id,
+            )
+
+            kg_rows = await load_tenant_kg_agents(db, tenant.id)
+            user_data["kg_agents"] = [
+                kg_agent_row_to_response(r).model_dump() for r in kg_rows
+            ]
+            default_kg = await resolve_default_kg_agent_id(db, tenant.id)
+            user_data["default_kg_agent_id"] = (
+                str(default_kg) if default_kg else None
+            )
+        else:
+            user_data["kg_agents"] = []
+            user_data["default_kg_agent_id"] = None
         
         return api_response(
             status=ResponseStatus.SUCCESS,

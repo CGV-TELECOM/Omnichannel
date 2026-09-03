@@ -1,6 +1,31 @@
 from pydantic import BaseModel, Field
 from typing import Any, Literal, Optional
 from uuid import UUID
+from datetime import datetime
+
+
+class TenantKgAgentInput(BaseModel):
+    """Một agent KG Core thuộc tenant."""
+
+    key: str = Field(default="default", max_length=64)
+    kg_agent_id: UUID = Field(..., description="UUID agent trên KG Core")
+    graph_id: Optional[UUID] = Field(
+        default=None,
+        description="Graph override; null → dùng tenant.graph_id",
+    )
+    label: Optional[str] = Field(default=None, max_length=128)
+    is_default: bool = Field(default=False)
+    is_active: bool = Field(default=True)
+
+
+class TenantKgAgentResponse(TenantKgAgentInput):
+    id: UUID
+    tenant_id: UUID
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
 
 
 class GroupBase(BaseModel):
@@ -33,8 +58,10 @@ class GroupBase(BaseModel):
             }
         },
     )
-    graph_id: Optional[UUID] = None
-    agent_id: Optional[UUID] = None
+    graph_id: Optional[UUID] = Field(
+        default=None,
+        description="Graph KG mặc định của tenant (có thể override từng agent trong kg_agents).",
+    )
     graph_activated: Optional[int] = 0
     webcall_config: Optional[dict[str, Any]] = Field(
         default=None,
@@ -61,22 +88,29 @@ class GroupBase(BaseModel):
         default=None,
         description=(
             "Bật/tắt gửi link đánh giá CSAT OmniHub khi resolve conversation "
-            "(kênh ngoài web widget). Mặc định true."
+            "(mọi kênh messaging, gồm live chat). Mặc định true."
         ),
     )
 
 
 class TenantCreate(GroupBase):
-    pass
+    kg_agents: Optional[list[TenantKgAgentInput]] = Field(
+        default=None,
+        description="Danh sách agent KG Core gắn tenant.",
+    )
 
 
 class TenantUpdate(GroupBase):
-    pass
+    kg_agents: Optional[list[TenantKgAgentInput]] = Field(
+        default=None,
+        description="Gửi full list để thay thế agent KG của tenant.",
+    )
 
 
 class TenantResponse(GroupBase):
     id: Optional[UUID] = None
     is_active: Optional[int] = None
+    kg_agents: list[TenantKgAgentResponse] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -103,6 +137,16 @@ class MessagingBotEntry(BaseModel):
         max_length=128,
         description="Nhãn hiển thị (tuỳ chọn).",
     )
+    tenant_kg_agent_id: Optional[UUID] = Field(
+        default=None,
+        description="FK tenant_kg_agents.id — KG agent dùng khi bot này reply.",
+    )
+
+
+class TenantKgAgentsReplaceBody(BaseModel):
+    """PUT /tenants/{tenant_id}/kg-agents — thay toàn bộ list."""
+
+    kg_agents: list[TenantKgAgentInput] = Field(default_factory=list)
 
 
 class TenantOwnSettingsUpdate(BaseModel):
@@ -110,7 +154,7 @@ class TenantOwnSettingsUpdate(BaseModel):
 
     conversation_rating_enabled: Optional[bool] = Field(
         default=None,
-        description="Bật/tắt gửi link đánh giá CSAT khi resolve (kênh ngoài web widget).",
+        description="Bật/tắt gửi link đánh giá CSAT khi resolve (mọi kênh, gồm live chat).",
     )
     chatbot_enabled: Optional[bool] = Field(
         default=None,

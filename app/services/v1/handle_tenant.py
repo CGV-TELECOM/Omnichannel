@@ -2,17 +2,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
 from app.db.models import (
     Tenant,
+    TenantKgAgent,
     User,
     ChatwootLegacyMap,
     ChatwootMapResourceType,
 )
 from app.schemas.requests.tenant import (
     TenantCreate,
+    TenantKgAgentInput,
+    TenantKgAgentsReplaceBody,
     TenantOwnSettingsResponse,
     TenantOwnSettingsUpdate,
     TenantResponse,
     TenantUpdate,
-) 
+)
 from sqlalchemy import select, func,  or_
 from uuid import UUID
 from sqlalchemy.future import select
@@ -27,6 +30,15 @@ from app.integrations.chatwoot import client as chatwoot_client
 from app.integrations.chatwoot.account_payload import sanitize_platform_account_payload
 from app.core.config.webcall_defaults import merge_webcall_config
 from app.seeds.rbac import seed_tenant_default_roles
+from app.services.v1.handle_tenant_kg_agent import (
+    KgAgentSyncError,
+    apply_tenant_kg_agents_sync,
+    ensure_graph_activation_has_kg_agents,
+    kg_agent_row_to_response,
+    load_kg_agents_map,
+    load_tenant_kg_agents,
+    validate_tenant_kg_agent_ids,
+)
 
 # meta_data chỉ dùng nội bộ OmniHub — không đồng bộ Platform API khi chỉ sửa các key này
 _CHATWOOT_META_SYNC_KEYS = frozenset(
@@ -112,7 +124,21 @@ def _tenant_chatwoot_account_payload(tenant: Tenant) -> tuple[dict[str, Any], di
     return sanitize_platform_account_payload(raw)
 
 
-async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id: UUID | None, agent_id: UUID | None, is_active: int | None, graph_activated: int | None, page: int, page_size: int, search: str | None, db: AsyncSession):
+async def _tenant_to_response(db: AsyncSession, tenant: Tenant) -> TenantResponse:
+    kg_rows = (
+        list(tenant.kg_agents)
+        if tenant.kg_agents
+        else await load_tenant_kg_agents(db, tenant.id)
+    )
+    base = TenantResponse.model_validate(tenant, from_attributes=True)
+    return base.model_copy(
+        update={
+            "kg_agents": [kg_agent_row_to_response(r) for r in kg_rows],
+        }
+    )
+
+
+async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id: UUID | None, kg_agent_id: UUID | None, is_active: int | None, graph_activated: int | None, page: int, page_size: int, search: str | None, db: AsyncSession):
     try:
         is_super_admin = await is_platform_admin(current_user, db)
 
@@ -135,7 +161,7 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
                 "Tìm tenant theo ID thành công",
-                TenantResponse.model_validate(result_tenant)
+                await _tenant_to_response(db, result_tenant),
             )
         else:
             query = select(Tenant)
@@ -149,8 +175,10 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
                 query = query.where(Tenant.id == current_user.tenant_id)
             if graph_id:
                 query = query.where(Tenant.graph_id == graph_id)
-            if agent_id:
-                query = query.where(Tenant.agent_id == agent_id)
+            if kg_agent_id:
+                query = query.join(
+                    TenantKgAgent, TenantKgAgent.tenant_id == Tenant.id
+                ).where(TenantKgAgent.kg_agent_id == kg_agent_id)
             if is_active is not None:
                 query = query.where(Tenant.is_active == is_active)
             if graph_activated is not None:
@@ -172,12 +200,22 @@ async def getAllTenant(_: Request, current_user: User, id: UUID | None, graph_id
             offset = (page - 1) * page_size
             query = query.offset(offset).limit(page_size)
             result = await db.execute(query)
-            tenants = result.scalars().all()
+            tenants = result.scalars().unique().all()
 
-            tenant_list = [
-                TenantResponse.model_validate(t)
-                for t in tenants
-            ]
+            kg_map = await load_kg_agents_map(db, [t.id for t in tenants])
+            tenant_list = []
+            for t in tenants:
+                base = TenantResponse.model_validate(t, from_attributes=True)
+                rows = kg_map.get(t.id, [])
+                tenant_list.append(
+                    base.model_copy(
+                        update={
+                            "kg_agents": [
+                                kg_agent_row_to_response(r) for r in rows
+                            ],
+                        }
+                    )
+                )
 
             return api_response(
                 ResponseStatus.SUCCESS,
@@ -242,7 +280,6 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             description=tenant_data.description,
             meta_data=meta,
             graph_id=tenant_data.graph_id,
-            agent_id=tenant_data.agent_id,
             graph_activated=tenant_data.graph_activated if tenant_data.graph_activated is not None else 0,
             webcall_config=merge_webcall_config(tenant_data.webcall_config),
             conversation_rating_enabled=(
@@ -253,6 +290,30 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
         )
         db.add(new_tenant)
         await db.flush()
+
+        if tenant_data.kg_agents is not None:
+            try:
+                await apply_tenant_kg_agents_sync(
+                    db, new_tenant, tenant_data.kg_agents
+                )
+                flag_modified(new_tenant, "meta_data")
+            except (ValueError, KgAgentSyncError) as ve:
+                await db.rollback()
+                return api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.BAD_REQUEST,
+                    str(ve),
+                )
+        else:
+            try:
+                await ensure_graph_activation_has_kg_agents(db, new_tenant)
+            except KgAgentSyncError as ve:
+                await db.rollback()
+                return api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.BAD_REQUEST,
+                    str(ve),
+                )
 
         chatwoot_payload, _ = _tenant_chatwoot_account_payload(new_tenant)
         cw_res = await chatwoot_client.platform_request(
@@ -340,7 +401,7 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
             ResponseStatusCode.CREATED, 
             "Thêm tenant thành công",
             data={
-                "tenant": TenantResponse.model_validate(new_tenant),
+                "tenant": await _tenant_to_response(db, new_tenant),
                 "messaging_linked": True,
             }
         )
@@ -399,6 +460,7 @@ async def updateTenant(
         
         # 4. Cập nhật dữ liệu
         updates = tenant_data.model_dump(exclude_unset=True)
+        kg_agents_payload = updates.pop("kg_agents", None)
         # Quyết định sync dựa trên giá trị thực sự thay đổi, không chỉ dựa vào key có mặt.
         sync_chatwoot = _should_sync_chatwoot_on_update_for_tenant(tenant, updates)
         if "webcall_config" in updates:
@@ -408,6 +470,32 @@ async def updateTenant(
             updates["meta_data"] = {**existing_meta, **updates["meta_data"]}
         for field, value in updates.items():
             setattr(tenant, field, value)
+
+        if kg_agents_payload is not None:
+            try:
+                await apply_tenant_kg_agents_sync(
+                    db,
+                    tenant,
+                    [TenantKgAgentInput.model_validate(x) for x in kg_agents_payload],
+                )
+                flag_modified(tenant, "meta_data")
+            except (ValueError, KgAgentSyncError) as ve:
+                await db.rollback()
+                return api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.BAD_REQUEST,
+                    str(ve),
+                )
+        elif "graph_activated" in updates:
+            try:
+                await ensure_graph_activation_has_kg_agents(db, tenant)
+            except KgAgentSyncError as ve:
+                await db.rollback()
+                return api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.BAD_REQUEST,
+                    str(ve),
+                )
 
         account_map = await _get_tenant_account_map(db, tenant.id)
         if account_map and sync_chatwoot:
@@ -483,7 +571,7 @@ async def updateTenant(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,
             "Cập nhật tenant thành công",
-            data=TenantResponse.model_validate(tenant),
+            data=await _tenant_to_response(db, tenant),
         )
 
     except SQLAlchemyError as e:
@@ -735,6 +823,9 @@ async def updateOwnTenantSettings(
                                 "agent_uuid": getattr(item, "agent_uuid"),
                                 "is_default": getattr(item, "is_default", False),
                                 "label": getattr(item, "label", None),
+                                "tenant_kg_agent_id": getattr(
+                                    item, "tenant_kg_agent_id", None
+                                ),
                             }
                         )
                     entries.append(entry)
@@ -748,6 +839,20 @@ async def updateOwnTenantSettings(
                         ResponseStatus.ERROR,
                         ResponseStatusCode.BAD_REQUEST,
                         err,
+                    )
+                kg_row_ids = [
+                    e.tenant_kg_agent_id
+                    for e in entries
+                    if e.tenant_kg_agent_id is not None
+                ]
+                kg_err = await validate_tenant_kg_agent_ids(
+                    db, tenant.id, kg_row_ids
+                )
+                if kg_err:
+                    return api_response(
+                        ResponseStatus.ERROR,
+                        ResponseStatusCode.BAD_REQUEST,
+                        kg_err,
                     )
                 if entries and not any(e.is_default for e in entries):
                     entries[0].is_default = True
@@ -793,6 +898,102 @@ async def updateOwnTenantSettings(
     except Exception as e:
         await db.rollback()
         print(f"[UNEXPECTED ERROR] updateOwnTenantSettings: {e}")
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Có lỗi không xác định xảy ra",
+        )
+
+
+async def listTenantKgAgents(
+    tenant_id: UUID,
+    current_user: User,
+    db: AsyncSession,
+):
+    try:
+        if not (await is_platform_admin(current_user, db)):
+            if current_user.tenant_id != tenant_id:
+                return api_response(
+                    ResponseStatus.ERROR,
+                    ResponseStatusCode.FORBIDDEN,
+                    "Bạn chỉ có thể xem KG agents của tenant mình",
+                )
+        tenant = await db.get(Tenant, tenant_id)
+        if tenant is None or tenant.is_active == 0:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Không tìm thấy tenant",
+            )
+        rows = await load_tenant_kg_agents(db, tenant_id)
+        return api_response(
+            ResponseStatus.SUCCESS,
+            ResponseStatusCode.OK,
+            "Lấy danh sách KG agents thành công",
+            {
+                "tenant_id": str(tenant_id),
+                "kg_agents": [kg_agent_row_to_response(r).model_dump() for r in rows],
+            },
+        )
+    except Exception as e:
+        print(f"[UNEXPECTED ERROR] listTenantKgAgents: {e}")
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Có lỗi không xác định xảy ra",
+        )
+
+
+async def replaceTenantKgAgents(
+    tenant_id: UUID,
+    current_user: User,
+    body: TenantKgAgentsReplaceBody,
+    db: AsyncSession,
+):
+    try:
+        if not (await is_platform_admin(current_user, db)):
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Chỉ platform admin mới có thể truy cập tài nguyên này",
+            )
+        tenant = await db.get(Tenant, tenant_id)
+        if tenant is None or tenant.is_active == 0:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Không tìm thấy tenant",
+            )
+        try:
+            rows = await apply_tenant_kg_agents_sync(db, tenant, body.kg_agents)
+            flag_modified(tenant, "meta_data")
+        except (ValueError, KgAgentSyncError) as ve:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.BAD_REQUEST,
+                str(ve),
+            )
+        await db.commit()
+        return api_response(
+            ResponseStatus.SUCCESS,
+            ResponseStatusCode.OK,
+            "Cập nhật KG agents thành công",
+            {
+                "tenant_id": str(tenant_id),
+                "kg_agents": [kg_agent_row_to_response(r).model_dump() for r in rows],
+            },
+        )
+    except SQLAlchemyError as e:
+        await db.rollback()
+        print(f"[DB ERROR] replaceTenantKgAgents: {e}")
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Có lỗi xảy ra khi thao tác với cơ sở dữ liệu",
+        )
+    except Exception as e:
+        await db.rollback()
+        print(f"[UNEXPECTED ERROR] replaceTenantKgAgents: {e}")
         return api_response(
             ResponseStatus.ERROR,
             ResponseStatusCode.INTERNAL_SERVER_ERROR,

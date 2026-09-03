@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Role, Permission, RolePermission, User, Levels, Tenant, ChatwootLegacyMap, ChatwootMapResourceType
+from app.db.models import Role, Permission, RolePermission, User, Levels, Tenant, TenantKgAgent, ChatwootLegacyMap, ChatwootMapResourceType
 from app.core.security.password_utils import hash_password
 from sqlalchemy.future import select
 from sqlalchemy import delete, func, or_
@@ -798,7 +798,6 @@ async def _get_or_create_tenant(db: AsyncSession, name: str, description: str) -
                 description=description,
                 is_active=1,
                 graph_activated=1,
-                agent_id=UUID("b10add77-0a1b-4974-9411-15ff68de61cd"),
                 graph_id=UUID("b10add77-0a1b-4974-9411-15ff68de61cd"),
                 meta_data={
                     "chatbot_enabled": True,
@@ -807,6 +806,18 @@ async def _get_or_create_tenant(db: AsyncSession, name: str, description: str) -
                 }
             )
             db.add(tenant)
+            await db.flush()
+            db.add(
+                TenantKgAgent(
+                    tenant_id=tenant.id,
+                    kg_agent_id=UUID("b10add77-0a1b-4974-9411-15ff68de61cd"),
+                    graph_id=UUID("b10add77-0a1b-4974-9411-15ff68de61cd"),
+                    key="default",
+                    label="Default",
+                    is_default=True,
+                    is_active=True,
+                )
+            )
             await db.commit()
             await db.refresh(tenant)
         return tenant

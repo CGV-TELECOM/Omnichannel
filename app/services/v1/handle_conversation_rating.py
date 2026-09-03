@@ -1,5 +1,5 @@
 """
-CSAT omnichannel MVP: tạo survey khi resolve (kênh ngoài web widget),
+CSAT omnichannel: tạo survey khi resolve (mọi kênh messaging, gồm live chat),
 gửi link token, nhận submit public, list theo tenant.
 """
 
@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, select, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,18 +37,6 @@ from app.services.v1.handle_chatwoot.chatbot import send_chatwoot_reply
 from app.utils.helpers import is_platform_admin
 
 logger = logging.getLogger(__name__)
-
-# Live chat dùng CSAT native Chatwoot — không gửi link OmniHub.
-_SKIP_CHANNELS = frozenset(
-    {
-        "channel::webwidget",
-        "channel::website",
-        "web_widget",
-        "website",
-        "Channel::WebWidget",
-        "Channel::Website",
-    }
-)
 
 
 def _resend_cooldown() -> timedelta:
@@ -113,14 +101,138 @@ def _norm_channel(raw: str | None) -> str | None:
     return s or None
 
 
-def _is_web_widget_channel(channel: str | None) -> bool:
-    if not channel:
-        return False
-    c = channel.strip()
-    if c in _SKIP_CHANNELS:
-        return True
-    return c.lower().replace(" ", "") in {
-        x.lower().replace(" ", "") for x in _SKIP_CHANNELS
+def _channel_kind(channel: str | None) -> str:
+    """Slug ngắn để filter/group (api, web_widget, email, …)."""
+    c = (channel or "").strip().lower().replace(" ", "")
+    if "webwidget" in c or c in ("website", "web_widget"):
+        return "web_widget"
+    if "api" in c:
+        return "api"
+    if "email" in c:
+        return "email"
+    if "facebook" in c or "instagram" in c or "telegram" in c or "line" in c:
+        return "social"
+    if "whatsapp" in c:
+        return "whatsapp"
+    return "other"
+
+
+def _channel_kind_label(channel: str | None) -> str:
+    """Nhãn hiển thị khi không có tên inbox."""
+    kind = _channel_kind(channel)
+    return {
+        "web_widget": "Live chat",
+        "api": "API Channel",
+        "email": "Email",
+        "social": "Social",
+        "whatsapp": "WhatsApp",
+    }.get(kind, channel or "Khác")
+
+
+def extract_inbox_from_payload(payload: dict[str, Any] | None) -> tuple[int | None, str | None]:
+    """Lấy inbox_id + inbox_name từ webhook / conversation payload."""
+    if not isinstance(payload, dict):
+        return None, None
+    inbox_id: int | None = None
+    inbox_name: str | None = None
+    for key in ("inbox_id",):
+        raw = payload.get(key)
+        if raw is not None:
+            try:
+                inbox_id = int(raw)
+            except (TypeError, ValueError):
+                pass
+    inbox = payload.get("inbox")
+    if isinstance(inbox, dict):
+        if inbox.get("id") is not None:
+            try:
+                inbox_id = int(inbox.get("id"))
+            except (TypeError, ValueError):
+                pass
+        name = inbox.get("name")
+        if name:
+            inbox_name = str(name).strip() or None
+    conv = payload.get("conversation")
+    if isinstance(conv, dict):
+        cid, cname = extract_inbox_from_payload(conv)
+        inbox_id = inbox_id or cid
+        inbox_name = inbox_name or cname
+    return inbox_id, inbox_name
+
+
+def extract_contact_from_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Lấy contact/sender từ webhook hoặc GET conversation (shape gần Chatwoot CSAT)."""
+    if not isinstance(payload, dict):
+        return None
+
+    def _normalize(raw: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        cid = raw.get("id")
+        if cid is None and not raw.get("name") and not raw.get("email"):
+            return None
+        return {
+            "id": cid,
+            "name": raw.get("name"),
+            "email": raw.get("email"),
+            "phone_number": raw.get("phone_number"),
+            "identifier": raw.get("identifier"),
+            "thumbnail": raw.get("thumbnail"),
+            "availability_status": raw.get("availability_status"),
+            "blocked": raw.get("blocked"),
+            "custom_attributes": raw.get("custom_attributes") or {},
+            "additional_attributes": raw.get("additional_attributes") or {},
+            "last_activity_at": raw.get("last_activity_at"),
+            "created_at": raw.get("created_at"),
+        }
+
+    direct = payload.get("contact")
+    if isinstance(direct, dict):
+        normalized = _normalize(direct)
+        if normalized:
+            return normalized
+
+    meta = payload.get("meta")
+    if isinstance(meta, dict):
+        for key in ("sender", "contact"):
+            normalized = _normalize(meta.get(key))
+            if normalized:
+                return normalized
+
+    conv = payload.get("conversation")
+    if isinstance(conv, dict):
+        nested = extract_contact_from_payload(conv)
+        if nested:
+            return nested
+
+    sender = payload.get("sender")
+    if isinstance(sender, dict):
+        normalized = _normalize(sender)
+        if normalized:
+            return normalized
+
+    return None
+
+
+def build_rating_source_meta(
+    *,
+    channel: str | None,
+    inbox_id: int | None,
+    inbox_name: str | None,
+) -> dict[str, Any]:
+    """
+    Metadata nguồn để FE truy vết: tên inbox (Zalo OA, Line Chat, …) + loại kênh kỹ thuật.
+    """
+    channel_type = _norm_channel(channel)
+    name = (inbox_name or "").strip() or None
+    kind = _channel_kind(channel_type)
+    source_label = name or _channel_kind_label(channel_type)
+    return {
+        "channel_type": channel_type,
+        "channel_kind": kind,
+        "inbox_id": inbox_id,
+        "inbox_name": name,
+        "source_label": source_label,
     }
 
 
@@ -277,13 +389,15 @@ async def fetch_conversation_channel_meta(
     messaging_account_id: int,
     conversation_id: int,
 ) -> dict[str, Any]:
-    """GET conversation messaging → channel / inbox / agent."""
+    """GET conversation messaging → channel / inbox / agent (+ tên inbox để truy vết nguồn)."""
     path = f"/api/v1/accounts/{messaging_account_id}/conversations/{conversation_id}"
     res = await chatwoot_client.application_request("GET", path)
     out: dict[str, Any] = {
         "channel": None,
         "inbox_id": None,
+        "inbox_name": None,
         "agent_chatwoot_id": None,
+        "contact": None,
     }
     if res.status_code != 200 or not isinstance(res.data, dict):
         logger.warning(
@@ -294,7 +408,25 @@ async def fetch_conversation_channel_meta(
         return out
     data = res.data
     out["channel"] = extract_channel_from_payload(data)
-    out["inbox_id"] = data.get("inbox_id")
+    iid, iname = extract_inbox_from_payload(data)
+    if data.get("inbox_id") is not None:
+        try:
+            iid = int(data.get("inbox_id"))
+        except (TypeError, ValueError):
+            pass
+    out["inbox_id"] = iid
+    out["inbox_name"] = iname
+    if iid is not None and not iname:
+        inbox_path = (
+            f"/api/v1/accounts/{messaging_account_id}/inboxes/{int(iid)}"
+        )
+        inbox_res = await chatwoot_client.application_request("GET", inbox_path)
+        if inbox_res.status_code == 200 and isinstance(inbox_res.data, dict):
+            payload = inbox_res.data.get("payload")
+            if isinstance(payload, dict) and payload.get("name"):
+                out["inbox_name"] = str(payload["name"]).strip()
+            elif inbox_res.data.get("name"):
+                out["inbox_name"] = str(inbox_res.data["name"]).strip()
     assignee = None
     meta = data.get("meta")
     if isinstance(meta, dict):
@@ -303,7 +435,37 @@ async def fetch_conversation_channel_meta(
         assignee = data.get("assignee")
     if isinstance(assignee, dict) and assignee.get("id") is not None:
         out["agent_chatwoot_id"] = assignee.get("id")
+    contact = extract_contact_from_payload(data)
+    if contact:
+        out["contact"] = contact
     return out
+
+
+async def enrich_rating_source_meta(
+    *,
+    messaging_account_id: int,
+    conversation_id: int,
+    channel: str | None,
+    meta: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Bổ sung inbox_name / channel từ GET conversation khi webhook thiếu."""
+    merged = dict(meta) if isinstance(meta, dict) else {}
+    if merged.get("channel") is None and channel:
+        merged["channel"] = channel
+    need_fetch = (
+        not merged.get("inbox_name")
+        or merged.get("inbox_id") is None
+        or not merged.get("channel")
+        or not merged.get("contact")
+    )
+    if need_fetch:
+        fetched = await fetch_conversation_channel_meta(
+            messaging_account_id, conversation_id
+        )
+        for key in ("channel", "inbox_id", "inbox_name", "agent_chatwoot_id", "contact"):
+            if merged.get(key) is None and fetched.get(key) is not None:
+                merged[key] = fetched[key]
+    return merged
 
 
 async def resolve_channel_or_skip(
@@ -315,7 +477,7 @@ async def resolve_channel_or_skip(
     """
     Case 4: bắt buộc biết channel trước khi gửi.
     Returns (channel, meta) — meta có thể chứa inbox/agent từ GET bổ sung.
-    channel None = bỏ qua (unknown hoặc web widget).
+    channel None = bỏ qua (không xác định được kênh).
     """
     meta: dict[str, Any] = {}
     ch = _norm_channel(channel)
@@ -326,15 +488,8 @@ async def resolve_channel_or_skip(
         ch = _norm_channel(meta.get("channel"))
     if not ch:
         logger.info(
-            "CSAT: không xác định được channel — bỏ qua conv=%s (tránh gửi nhầm web widget)",
+            "CSAT: không xác định được channel — bỏ qua conv=%s",
             conversation_id,
-        )
-        return None, meta
-    if _is_web_widget_channel(ch):
-        logger.info(
-            "Bỏ qua CSAT OmniHub cho web widget conversation=%s channel=%s",
-            conversation_id,
-            ch,
         )
         return None, meta
     return ch, meta
@@ -368,13 +523,18 @@ def _rating_public_url(token: str) -> str | None:
 
 
 def _rating_to_dict(row: ConversationRating, *, include_token: bool = False) -> dict[str, Any]:
+    meta = row.meta_data if isinstance(row.meta_data, dict) else {}
     data: dict[str, Any] = {
         "id": str(row.id),
         "tenant_id": str(row.tenant_id),
         "messaging_account_id": row.messaging_account_id,
         "conversation_id": row.conversation_id,
         "channel": row.channel,
-        "inbox_id": row.inbox_id,
+        "channel_type": meta.get("channel_type") or row.channel,
+        "channel_kind": meta.get("channel_kind"),
+        "source_label": meta.get("source_label"),
+        "inbox_id": row.inbox_id or meta.get("inbox_id"),
+        "inbox_name": meta.get("inbox_name"),
         "agent_chatwoot_id": row.agent_chatwoot_id,
         "score": row.score,
         "comment": row.comment,
@@ -384,10 +544,361 @@ def _rating_to_dict(row: ConversationRating, *, include_token: bool = False) -> 
         "submitted_at": row.submitted_at,
         "expires_at": row.expires_at,
         "created_at": row.created_at,
+        "meta_data": meta,
     }
     if include_token:
         data["token"] = row.token
     return data
+
+
+def _rating_to_messaging_item(
+    row: ConversationRating,
+    *,
+    contact: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Shape gần Chatwoot csat_survey_responses — thêm inbox/source + contact."""
+    meta = row.meta_data if isinstance(row.meta_data, dict) else {}
+    agent_id = row.agent_chatwoot_id
+    resolved_contact = contact or meta.get("contact")
+    item: dict[str, Any] = {
+        "id": str(row.id),
+        "rating": row.score,
+        "feedback_message": row.comment or "",
+        "conversation_id": row.conversation_id,
+        "account_id": row.messaging_account_id,
+        "message_id": None,
+        "inbox_id": row.inbox_id or meta.get("inbox_id"),
+        "inbox_name": meta.get("inbox_name"),
+        "source_label": meta.get("source_label"),
+        "channel": row.channel,
+        "channel_type": meta.get("channel_type") or row.channel,
+        "channel_kind": meta.get("channel_kind"),
+        "status": row.status,
+        "assigned_agent": {"id": agent_id} if agent_id is not None else None,
+        "agent_chatwoot_id": agent_id,
+        "created_at": row.submitted_at or row.created_at,
+        "submitted_at": row.submitted_at,
+        "sent_at": row.sent_at,
+        "expires_at": row.expires_at,
+    }
+    if isinstance(resolved_contact, dict):
+        item["contact"] = resolved_contact
+    return item
+
+
+async def _batch_fetch_contacts_for_ratings(
+    rows: list[ConversationRating],
+) -> dict[tuple[int, int], dict[str, Any]]:
+    """Fetch contact từ messaging cho rating chưa lưu contact trong meta."""
+    keys: list[tuple[int, int]] = []
+    for row in rows:
+        meta = row.meta_data if isinstance(row.meta_data, dict) else {}
+        if meta.get("contact"):
+            continue
+        if row.messaging_account_id is None or row.conversation_id is None:
+            continue
+        pair = (int(row.messaging_account_id), int(row.conversation_id))
+        if pair not in keys:
+            keys.append(pair)
+
+    out: dict[tuple[int, int], dict[str, Any]] = {}
+    for account_id, conversation_id in keys:
+        fetched = await fetch_conversation_channel_meta(account_id, conversation_id)
+        contact = fetched.get("contact")
+        if isinstance(contact, dict):
+            out[(account_id, conversation_id)] = contact
+    return out
+
+
+def _parse_period_bounds(
+    since: str | None, until: str | None
+) -> tuple[datetime | None, datetime | None]:
+    """since/until: unix epoch (giây) hoặc ISO datetime."""
+
+    def _one(raw: str | None) -> datetime | None:
+        if not raw:
+            return None
+        v = raw.strip()
+        if not v:
+            return None
+        if v.isdigit():
+            return datetime.fromtimestamp(int(v), tz=timezone.utc)
+        dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    return _one(since), _one(until)
+
+
+def _rating_query_filters(
+    tenant_id: UUID,
+    *,
+    since: str | None = None,
+    until: str | None = None,
+    status: str | None = None,
+    channel: str | None = None,
+    inbox_id: int | None = None,
+    agent_chatwoot_id: int | None = None,
+) -> list[Any]:
+    filters: list[Any] = [ConversationRating.tenant_id == tenant_id]
+    since_dt, until_dt = _parse_period_bounds(since, until)
+    if since_dt is not None:
+        filters.append(ConversationRating.created_at >= since_dt)
+    if until_dt is not None:
+        filters.append(ConversationRating.created_at <= until_dt)
+    if status:
+        filters.append(ConversationRating.status == status)
+    if channel:
+        filters.append(ConversationRating.channel == channel)
+    if inbox_id is not None:
+        filters.append(ConversationRating.inbox_id == int(inbox_id))
+    if agent_chatwoot_id is not None:
+        filters.append(ConversationRating.agent_chatwoot_id == int(agent_chatwoot_id))
+    return filters
+
+
+def _ratings_count_from_rows(
+    score_rows: list[tuple[Any, Any]],
+) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for score, cnt in score_rows:
+        if score is None:
+            continue
+        out[str(int(score))] = int(cnt)
+    return out
+
+
+def _aggregate_metrics_by_inbox(
+    rows: list[tuple[Any, ...]],
+) -> list[dict[str, Any]]:
+    buckets: dict[int | None, dict[str, Any]] = {}
+    for inbox_id, score, status, sent_at, meta_raw, channel in rows:
+        meta = meta_raw if isinstance(meta_raw, dict) else {}
+        if inbox_id not in buckets:
+            buckets[inbox_id] = {
+                "inbox_id": inbox_id,
+                "inbox_name": meta.get("inbox_name"),
+                "source_label": meta.get("source_label") or meta.get("inbox_name"),
+                "channel_kind": meta.get("channel_kind"),
+                "channel_type": meta.get("channel_type") or channel,
+                "ratings_count": {},
+                "total_count": 0,
+                "total_sent_messages_count": 0,
+                "_scores": [],
+            }
+        bucket = buckets[inbox_id]
+        if sent_at is not None:
+            bucket["total_sent_messages_count"] += 1
+        if (
+            status == ConversationRatingStatus.SUBMITTED.value
+            and score is not None
+        ):
+            key = str(int(score))
+            bucket["ratings_count"][key] = bucket["ratings_count"].get(key, 0) + 1
+            bucket["total_count"] += 1
+            bucket["_scores"].append(int(score))
+
+    result: list[dict[str, Any]] = []
+    for bucket in buckets.values():
+        scores: list[int] = bucket.pop("_scores")
+        bucket["average_score"] = (
+            round(sum(scores) / len(scores), 2) if scores else None
+        )
+        result.append(bucket)
+    result.sort(
+        key=lambda x: (
+            -(x.get("total_count") or 0),
+            (x.get("inbox_name") or "") or "",
+        )
+    )
+    return result
+
+
+async def get_ratings_metrics(
+    db: AsyncSession,
+    current_user: User,
+    tenant_id: UUID,
+    *,
+    since: str | None = None,
+    until: str | None = None,
+    channel: str | None = None,
+    inbox_id: int | None = None,
+    agent_chatwoot_id: int | None = None,
+):
+    """
+  CSAT OmniHub — tổng hợp (tương thích shape Chatwoot metrics) + breakdown theo inbox.
+    """
+    denied = await _require_tenant_access(current_user, tenant_id, db)
+    if denied is not None:
+        return denied
+
+    try:
+        filters = _rating_query_filters(
+            tenant_id,
+            since=since,
+            until=until,
+            channel=channel,
+            inbox_id=inbox_id,
+            agent_chatwoot_id=agent_chatwoot_id,
+        )
+        submitted_filters = filters + [
+            ConversationRating.status == ConversationRatingStatus.SUBMITTED.value,
+            ConversationRating.score.isnot(None),
+        ]
+
+        score_q = await db.execute(
+            select(ConversationRating.score, func.count())
+            .where(and_(*submitted_filters))
+            .group_by(ConversationRating.score)
+        )
+        ratings_count = _ratings_count_from_rows(list(score_q.all()))
+        total_count = sum(ratings_count.values())
+
+        sent_q = await db.execute(
+            select(func.count())
+            .select_from(ConversationRating)
+            .where(and_(*filters, ConversationRating.sent_at.isnot(None)))
+        )
+        total_sent = int(sent_q.scalar() or 0)
+
+        pending_q = await db.execute(
+            select(func.count())
+            .select_from(ConversationRating)
+            .where(
+                and_(*filters, ConversationRating.status == ConversationRatingStatus.PENDING.value)
+            )
+        )
+        expired_q = await db.execute(
+            select(func.count())
+            .select_from(ConversationRating)
+            .where(
+                and_(*filters, ConversationRating.status == ConversationRatingStatus.EXPIRED.value)
+            )
+        )
+
+        avg_q = await db.execute(
+            select(func.avg(ConversationRating.score)).where(and_(*submitted_filters))
+        )
+        avg_val = avg_q.scalar()
+        average_score = round(float(avg_val), 2) if avg_val is not None else None
+
+        breakdown_q = await db.execute(
+            select(
+                ConversationRating.inbox_id,
+                ConversationRating.score,
+                ConversationRating.status,
+                ConversationRating.sent_at,
+                ConversationRating.meta_data,
+                ConversationRating.channel,
+            ).where(and_(*filters))
+        )
+        by_inbox = _aggregate_metrics_by_inbox(list(breakdown_q.all()))
+
+        return api_response(
+            ResponseStatus.SUCCESS,
+            ResponseStatusCode.OK,
+            "Lấy CSAT metrics OmniHub thành công",
+            {
+                "tenant_id": str(tenant_id),
+                "total_count": total_count,
+                "ratings_count": ratings_count,
+                "total_sent_messages_count": total_sent,
+                "average_score": average_score,
+                "pending_count": int(pending_q.scalar() or 0),
+                "expired_count": int(expired_q.scalar() or 0),
+                "by_inbox": by_inbox,
+            },
+        )
+    except Exception as e:
+        logger.exception("get_ratings_metrics: %s", e)
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Lỗi khi lấy CSAT metrics",
+        )
+
+
+async def list_rating_responses(
+    db: AsyncSession,
+    current_user: User,
+    tenant_id: UUID,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    since: str | None = None,
+    until: str | None = None,
+    status: str | None = ConversationRatingStatus.SUBMITTED.value,
+    channel: str | None = None,
+    inbox_id: int | None = None,
+    agent_chatwoot_id: int | None = None,
+):
+    """
+    Danh sách chi tiết CSAT — shape `messaging[]` gần Chatwoot, có inbox/source.
+    """
+    denied = await _require_tenant_access(current_user, tenant_id, db)
+    if denied is not None:
+        return denied
+
+    try:
+        filters = _rating_query_filters(
+            tenant_id,
+            since=since,
+            until=until,
+            status=status,
+            channel=channel,
+            inbox_id=inbox_id,
+            agent_chatwoot_id=agent_chatwoot_id,
+        )
+
+        total_q = await db.execute(
+            select(func.count()).select_from(ConversationRating).where(and_(*filters))
+        )
+        total = int(total_q.scalar() or 0)
+
+        offset = (page - 1) * page_size
+        rows_q = await db.execute(
+            select(ConversationRating)
+            .where(and_(*filters))
+            .order_by(
+                ConversationRating.submitted_at.desc().nullslast(),
+                ConversationRating.created_at.desc(),
+            )
+            .offset(offset)
+            .limit(page_size)
+        )
+        rows = list(rows_q.scalars().all())
+        contact_map = await _batch_fetch_contacts_for_ratings(rows)
+
+        messaging = []
+        for row in rows:
+            pair = (
+                (int(row.messaging_account_id), int(row.conversation_id))
+                if row.messaging_account_id is not None and row.conversation_id is not None
+                else None
+            )
+            contact = contact_map.get(pair) if pair else None
+            messaging.append(_rating_to_messaging_item(row, contact=contact))
+
+        return api_response(
+            ResponseStatus.SUCCESS,
+            ResponseStatusCode.OK,
+            "Lấy danh sách CSAT responses thành công",
+            {
+                "tenant_id": str(tenant_id),
+                "messaging": messaging,
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+            },
+        )
+    except Exception as e:
+        logger.exception("list_rating_responses: %s", e)
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            "Lỗi khi lấy danh sách CSAT responses",
+        )
 
 
 async def _ensure_rating_url(row: ConversationRating) -> str | None:
@@ -441,13 +952,15 @@ async def maybe_create_and_send_rating(
     channel: str | None = None,
     inbox_id: int | None = None,
     agent_chatwoot_id: int | None = None,
+    source_inbox_name: str | None = None,
+    source_contact: dict[str, Any] | None = None,
     send_message: bool = True,
     skip_throttle: bool = False,
 ) -> ConversationRating | None:
     """
     Khi resolve (đã xác nhận transition ở caller webhook):
     - Tenant.conversation_rating_enabled = false → bỏ qua
-    - Channel bắt buộc; web widget / unknown → bỏ qua
+    - Channel bắt buộc; không xác định được → bỏ qua
     - Advisory lock + dedupe giây → chống race webhook/API
     - Pending chưa gửi → retry
     - Cooldown giờ → không tạo survey mới
@@ -469,22 +982,34 @@ async def maybe_create_and_send_rating(
     if resolved_channel is None:
         return None
 
+    seed_meta: dict[str, Any] = dict(fetched_meta)
+    if inbox_id is not None:
+        seed_meta["inbox_id"] = inbox_id
+    if source_inbox_name and str(source_inbox_name).strip():
+        seed_meta["inbox_name"] = str(source_inbox_name).strip()
+    if isinstance(source_contact, dict):
+        seed_meta["contact"] = source_contact
+
+    fetched_meta = await enrich_rating_source_meta(
+        messaging_account_id=messaging_account_id,
+        conversation_id=conversation_id,
+        channel=resolved_channel,
+        meta=seed_meta,
+    )
     if inbox_id is None and fetched_meta.get("inbox_id") is not None:
         inbox_id = int(fetched_meta["inbox_id"])
     if agent_chatwoot_id is None and fetched_meta.get("agent_chatwoot_id") is not None:
         agent_chatwoot_id = int(fetched_meta["agent_chatwoot_id"])
-    if inbox_id is None or agent_chatwoot_id is None:
-        if not fetched_meta:
-            fetched_meta = await fetch_conversation_channel_meta(
-                messaging_account_id, conversation_id
-            )
-            if inbox_id is None and fetched_meta.get("inbox_id") is not None:
-                inbox_id = int(fetched_meta["inbox_id"])
-            if (
-                agent_chatwoot_id is None
-                and fetched_meta.get("agent_chatwoot_id") is not None
-            ):
-                agent_chatwoot_id = int(fetched_meta["agent_chatwoot_id"])
+    if not fetched_meta.get("channel"):
+        fetched_meta["channel"] = resolved_channel
+
+    source_meta = build_rating_source_meta(
+        channel=resolved_channel,
+        inbox_id=inbox_id,
+        inbox_name=fetched_meta.get("inbox_name"),
+    )
+    if isinstance(fetched_meta.get("contact"), dict):
+        source_meta["contact"] = fetched_meta["contact"]
 
     await _advisory_lock_conversation(
         db,
@@ -548,6 +1073,7 @@ async def maybe_create_and_send_rating(
         token=token,
         rating_url=rating_url,
         expires_at=now + timedelta(hours=expire_hours),
+        meta_data=source_meta,
         created_at=now,
         updated_at=now,
     )
@@ -592,11 +1118,21 @@ async def handle_resolved_conversation_payload(
         return
 
     channel = extract_channel_from_payload(payload)
-    inbox_id = None
-    if isinstance(conv, dict):
+    inbox_id, inbox_name = extract_inbox_from_payload(
+        conv if isinstance(conv, dict) else payload
+    )
+    if inbox_id is None and isinstance(conv, dict):
         inbox_id = conv.get("inbox_id")
     if inbox_id is None:
         inbox_id = payload.get("inbox_id")
+    if not inbox_name:
+        _, inbox_name = extract_inbox_from_payload(payload)
+
+    webhook_contact = extract_contact_from_payload(
+        conv if isinstance(conv, dict) else payload
+    )
+    if webhook_contact is None:
+        webhook_contact = extract_contact_from_payload(payload)
 
     assignee = None
     if isinstance(conv, dict):
@@ -621,6 +1157,8 @@ async def handle_resolved_conversation_payload(
             channel=channel,
             inbox_id=int(inbox_id) if inbox_id is not None else None,
             agent_chatwoot_id=coerce_assignee_id(agent_id),
+            source_inbox_name=inbox_name,
+            source_contact=webhook_contact,
         )
     except Exception as e:
         logger.exception("CSAT: lỗi khi tạo/gửi rating: %s", e)
@@ -759,12 +1297,6 @@ async def send_rating_manually(
             ResponseStatusCode.NOT_FOUND,
             "Không tìm thấy conversation trên messaging",
         )
-    if channel and _is_web_widget_channel(channel):
-        return api_response(
-            ResponseStatus.ERROR,
-            ResponseStatusCode.BAD_REQUEST,
-            "Kênh web widget dùng CSAT native Chatwoot — không gửi link OmniHub",
-        )
 
     assignee_id = meta.get("agent_chatwoot_id")
     assignee_denied = await _require_conversation_assignee(
@@ -803,6 +1335,7 @@ async def send_rating_manually(
                 if meta.get("agent_chatwoot_id") is not None
                 else None
             ),
+            source_inbox_name=meta.get("inbox_name"),
             send_message=True,
             skip_throttle=force_resend,
         )
@@ -1006,6 +1539,7 @@ async def list_ratings(
     page_size: int = 20,
     status: str | None = None,
     channel: str | None = None,
+    inbox_id: int | None = None,
 ):
     denied = await _require_tenant_access(current_user, tenant_id, db)
     if denied is not None:
@@ -1017,6 +1551,8 @@ async def list_ratings(
             filters.append(ConversationRating.status == status)
         if channel:
             filters.append(ConversationRating.channel == channel)
+        if inbox_id is not None:
+            filters.append(ConversationRating.inbox_id == int(inbox_id))
 
         from sqlalchemy import func
 

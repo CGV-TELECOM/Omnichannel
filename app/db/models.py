@@ -194,11 +194,16 @@ class Tenant(Base):
     description = Column(String(255))
     is_active = Column(Integer, default=1)
     partner_id = Column(UUID(as_uuid=True), nullable=True)
+    # manhnx - merge graph: 18-06-2026 — graph_id default; agent KG → tenant_kg_agents
+    graph_id = Column(UUID(as_uuid=True), nullable=True)
+    graph_activated = Column(Integer, default=0)  # 0: chưa kích hoạt, 1: đã kích hoạt
     # manhnx - merge graph: 18-06-2026
-    graph_id = Column(UUID(as_uuid=True), nullable=True) # trường dùng để map với graph kg
-    agent_id = Column(UUID(as_uuid=True), nullable=True) # trường dùng để map với agent kg để trả lời
-    graph_activated = Column(Integer, default=0) # 0: chưa kích hoạt, 1: đã kích hoạt
-    # manhnx - merge graph: 18-06-2026
+    kg_agents = relationship(
+        "TenantKgAgent",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
     meta_data = Column(JSONB, nullable=True, default=lambda: {"chatbot_enabled": True, "default_responder": "bot"})
     # manhnx 30-07-2026: thêm trường để cấu hình webcall
     # domain_uuid / hotlines dùng resolve tenant khi webhook inbound (không có JWT)
@@ -207,13 +212,51 @@ class Tenant(Base):
         nullable=True,
         default=lambda: dict(DEFAULT_WEBCALL_CONFIG),
     )
-    # CSAT omnichannel: bật/tắt gửi link đánh giá khi resolve (kênh ngoài web widget)
+    # CSAT omnichannel: bật/tắt gửi link đánh giá khi resolve (mọi kênh messaging)
     conversation_rating_enabled = Column(
         Boolean,
         nullable=False,
         default=True,
         server_default=text("true"),
     )
+
+
+class TenantKgAgent(Base):
+    """Map tenant ↔ agent KG Core (đa agent / tenant)."""
+
+    __tablename__ = "tenant_kg_agents"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "key", name="uq_tenant_kg_agents_tenant_key"),
+        Index("ix_tenant_kg_agents_tenant_id", "tenant_id"),
+        Index("ix_tenant_kg_agents_kg_agent_id", "kg_agent_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
+    tenant_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kg_agent_id = Column(UUID(as_uuid=True), nullable=False)
+    graph_id = Column(UUID(as_uuid=True), nullable=True)
+    key = Column(String(64), nullable=False, default="default")
+    label = Column(String(128), nullable=True)
+    is_default = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    tenant = relationship("Tenant", back_populates="kg_agents")
+
 
 # manhnx - 18-06-2026: lưu lại thông tin được cung cấp từ KH
 class CustomerProvidedInfo(Base):
@@ -672,7 +715,7 @@ class ConversationRatingStatus(str, enum.Enum):
 class ConversationRating(Base):
     """
     Đánh giá sau hội thoại (CSAT) — OmniHub sở hữu.
-    Dùng cho kênh ngoài web widget (Zalo, FB, …); live chat có thể giữ CSAT Chatwoot.
+    Mọi kênh messaging (Zalo, live chat / web widget, API, …): link token + submit public.
     """
 
     __tablename__ = "conversation_ratings"

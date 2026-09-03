@@ -161,12 +161,14 @@ def parse_tenant_messaging_bots(meta: dict[str, Any] | None) -> list[MessagingBo
                 continue
             key = str(item.get("key") or "default").strip() or "default"
             label = item.get("label")
+            kg_row_id = _parse_uuid(item.get("tenant_kg_agent_id"))
             entries.append(
                 MessagingBotEntry(
                     key=key[:64],
                     agent_uuid=agent_uuid,
                     is_default=bool(item.get("is_default")),
                     label=(str(label)[:128] if label else None),
+                    tenant_kg_agent_id=kg_row_id,
                 )
             )
 
@@ -207,6 +209,9 @@ def messaging_bots_to_meta_list(
             "agent_uuid": str(e.agent_uuid),
             "is_default": bool(e.is_default),
             "label": e.label,
+            "tenant_kg_agent_id": (
+                str(e.tenant_kg_agent_id) if e.tenant_kg_agent_id else None
+            ),
         }
         for e in entries
     ]
@@ -401,6 +406,38 @@ async def resolve_default_bot_chatwoot_id(
     return None
 
 
+async def resolve_kg_agent_id_for_assignee(
+    db: AsyncSession,
+    tenant: Tenant,
+    assignee_chatwoot_id: int | None,
+) -> UUID | None:
+    """Map assignee bot → KG agent (tenant_kg_agent_id) hoặc default."""
+    from app.services.v1.handle_tenant_kg_agent import (
+        resolve_default_kg_agent_id,
+        resolve_kg_agent_id_by_row_id,
+    )
+
+    meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+    bots = parse_tenant_messaging_bots(meta)
+    if assignee_chatwoot_id is not None and bots:
+        uuids = [e.agent_uuid for e in bots]
+        remote, _ = await _translate_local_agent_uuids_to_remote(
+            db, tenant.id, uuids
+        )
+        cw_to_entry: dict[int, MessagingBotEntry] = {}
+        for idx, agent_uuid in enumerate(uuids):
+            if idx < len(remote):
+                cw_to_entry[int(remote[idx])] = bots[idx]
+        entry = cw_to_entry.get(int(assignee_chatwoot_id))
+        if entry and entry.tenant_kg_agent_id:
+            kg_id = await resolve_kg_agent_id_by_row_id(
+                db, tenant.id, entry.tenant_kg_agent_id
+            )
+            if kg_id is not None:
+                return kg_id
+    return await resolve_default_kg_agent_id(db, tenant.id)
+
+
 async def is_bot_assignee(
     db: AsyncSession,
     tenant: Tenant | UUID,
@@ -437,9 +474,13 @@ async def should_bot_respond(
     refresh_assignee: bool = True,
 ) -> tuple[bool, str]:
     """Quyết định bot OmniHub (KG) có được reply không. Returns (allowed, reason)."""
+    from app.services.v1.handle_tenant_kg_agent import tenant_has_active_kg_agent
+
     tenant = await db.get(Tenant, tenant_id)
-    if not tenant or not tenant.agent_id or not tenant.graph_activated:
+    if not tenant or not tenant.graph_activated:
         return False, "tenant_agent_inactive"
+    if not await tenant_has_active_kg_agent(db, tenant_id):
+        return False, "tenant_kg_agent_missing"
 
     chatbot_enabled_flag, _default_responder = _tenant_bot_policy(tenant)
     if not chatbot_enabled_flag:
@@ -621,14 +662,22 @@ async def claim_and_reply_omnihub_kg(
         return False, claim_reason
 
     tenant = await db.get(Tenant, tenant_id)
-    if not tenant or not tenant.agent_id:
+    assignee_id = extract_assignee_id(conversation_payload)
+    if assignee_id is None:
+        assignee_id = await fetch_conversation_assignee_id(
+            account_id, int(conversation_id)
+        )
+    kg_agent_id = await resolve_kg_agent_id_for_assignee(
+        db, tenant, coerce_assignee_id(assignee_id)
+    )
+    if not tenant or not kg_agent_id:
         await _release_incoming_message_claim(account_id, message_id)
-        return False, "tenant_agent_missing"
+        return False, "tenant_kg_agent_missing"
 
     session_id = conversation_payload.get("uuid") or str(conversation_id)
     reply_text = await call_kg_chatbot_core(
         tenant_id=tenant_id,
-        agent_id=tenant.agent_id,
+        agent_id=kg_agent_id,
         session_id=str(session_id),
         message_content=message_content,
     )
