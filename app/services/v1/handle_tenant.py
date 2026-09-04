@@ -267,11 +267,14 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
                 "Đã tồn tại tên tenant này rồi, vui lòng kiểm tra lại"
             )  
 
-        meta = {"chatbot_enabled": True, "default_responder": "agent", "messaging_bots": []}
+        from app.services.v1.handle_chatwoot.chatbot import (
+            default_tenant_bot_meta,
+            normalize_messaging_bots_meta,
+        )
+
+        meta = default_tenant_bot_meta()
         if tenant_data.meta_data and isinstance(tenant_data.meta_data, dict):
             meta.update(tenant_data.meta_data)
-        from app.services.v1.handle_chatwoot.chatbot import normalize_messaging_bots_meta
-
         meta, _ = normalize_messaging_bots_meta(meta)
 
         # Tạo tenant mới
@@ -667,7 +670,10 @@ _DEFAULT_RESPONDER: Literal["bot", "agent"] = "agent"
 
 
 def _tenant_own_settings_payload(tenant: Tenant) -> TenantOwnSettingsResponse:
-    from app.services.v1.handle_chatwoot.chatbot import parse_tenant_messaging_bots
+    from app.services.v1.handle_chatwoot.chatbot import (
+        messaging_bots_public_list,
+        parse_tenant_messaging_bots,
+    )
 
     meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
     responder = meta.get("default_responder", _DEFAULT_RESPONDER)
@@ -680,7 +686,7 @@ def _tenant_own_settings_payload(tenant: Tenant) -> TenantOwnSettingsResponse:
         ),
         chatbot_enabled=meta.get("chatbot_enabled") is not False,
         default_responder=responder,
-        messaging_bots=bots,
+        messaging_bots=messaging_bots_public_list(bots),
     )
 
 
@@ -797,7 +803,6 @@ async def updateOwnTenantSettings(
                 messaging_bots_to_meta_list,
                 normalize_messaging_bots_meta,
             )
-            from app.schemas.requests.tenant import MessagingBotEntry
 
             meta = dict(tenant.meta_data) if isinstance(tenant.meta_data, dict) else {}
             meta, _ = normalize_messaging_bots_meta(meta)
@@ -809,27 +814,14 @@ async def updateOwnTenantSettings(
 
             if "messaging_bots" in updates:
                 bots_raw = updates["messaging_bots"] or []
-                entries: list[MessagingBotEntry] = []
-                uuids: list[UUID] = []
-                for item in bots_raw:
-                    if isinstance(item, MessagingBotEntry):
-                        entry = item
-                    elif isinstance(item, dict):
-                        entry = MessagingBotEntry.model_validate(item)
-                    else:
-                        entry = MessagingBotEntry.model_validate(
-                            {
-                                "key": getattr(item, "key", "default"),
-                                "agent_uuid": getattr(item, "agent_uuid"),
-                                "is_default": getattr(item, "is_default", False),
-                                "label": getattr(item, "label", None),
-                                "tenant_kg_agent_id": getattr(
-                                    item, "tenant_kg_agent_id", None
-                                ),
-                            }
-                        )
-                    entries.append(entry)
-                    uuids.append(entry.agent_uuid)
+                from app.services.v1.handle_chatwoot.chatbot import (
+                    merge_messaging_bots_preserving_tokens,
+                )
+
+                entries = merge_messaging_bots_preserving_tokens(
+                    bots_raw, meta
+                )
+                uuids: list[UUID] = [e.agent_uuid for e in entries]
 
                 err = await _validate_messaging_bot_agent_uuids(
                     db, tenant.id, uuids

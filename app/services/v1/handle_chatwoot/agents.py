@@ -37,12 +37,12 @@ async def list_agents(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        # if not await is_platform_admin(current_user, db):
+        #     return api_response(
+        #         ResponseStatus.ERROR,
+        #         ResponseStatusCode.FORBIDDEN,
+        #         "Chỉ quản trị viên mới thực hiện được thao tác này",
+        #     )
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
@@ -201,13 +201,12 @@ async def update_agent(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
-
+        # if not await is_platform_admin(current_user, db):
+        #     return api_response(
+        #         ResponseStatus.ERROR,
+        #         ResponseStatusCode.FORBIDDEN,
+        #         "Chỉ quản trị viên mới thực hiện được thao tác này",
+        #     )
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(

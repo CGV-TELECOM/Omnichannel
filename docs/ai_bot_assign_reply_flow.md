@@ -29,7 +29,16 @@ Mỗi tenant gắn **UUID agent nội bộ** qua list `messaging_bots` (có th�
 
 | Key | Nơi | Ý nghĩa |
 |-----|-----|---------|
-| `messaging_bots` | `tenant.meta_data` | **Nguồn sự thật duy nhất.** `[]` = không dùng AI Bot; có phần tử = bot(s). Shape: `{ key, agent_uuid, is_default, label }` |
+| `messaging_bots` | `tenant.meta_data` | **Nguồn sự thật duy nhất.** `[]` = không dùng AI Bot; có phần tử = bot(s). Shape: `{ key, agent_uuid, is_default, label, tenant_kg_agent_id?, api_access_token? }` |
+
+**Sender trên widget:** Chatwoot gắn tên theo chủ `api_access_token` dùng khi POST message. OmniHub resolve theo thứ tự:
+
+1. `messaging_bots[]` khớp assignee có `api_access_token` (per-tenant / multi-bot)
+2. Default bot có token
+3. `CHATWOOT_BOT_API_TOKEN` (.env — fallback legacy)
+4. `CHATWOOT_USER_API_TOKEN` (admin tích hợp — tránh dùng cho tin khách)
+
+GET `/tenants/me/settings` trả `has_api_access_token` (không lộ raw). PATCH: omit/null = giữ token cũ theo `agent_uuid`; `""` = xóa; chuỗi = ghi mới.
 | `chatbot_enabled` | `tenant.meta_data` | Kill-switch toàn tenant |
 | `default_responder` | `bot` \| `agent` | Auto-assign bot khi conversation mới (chỉ khi có bot `is_default`) |
 
@@ -375,7 +384,9 @@ FE lấy UUID từ `GET /api/v1/messaging/tenants/{tenant_id}/agents` (không nh
       "key": "default",
       "agent_uuid": "019fa67b-800a-7086-bbe3-946f16dfdc5c",
       "is_default": true,
-      "label": "AI Bot"
+      "label": "AI Bot",
+      "tenant_kg_agent_id": null,
+      "api_access_token": null
     }
   ]
 }
@@ -390,13 +401,15 @@ FE lấy UUID từ `GET /api/v1/messaging/tenants/{tenant_id}/agents` (không nh
       "key": "default",
       "agent_uuid": "019fa67b-800a-7086-bbe3-946f16dfdc5c",
       "is_default": true,
-      "label": "AI Bot chính"
+      "label": "AI Bot chính",
+      "api_access_token": null
     },
     {
       "key": "sales",
       "agent_uuid": "019fa67b-aaaa-bbbb-cccc-946f16dfdc5c",
       "is_default": false,
-      "label": "Bot sales"
+      "label": "Bot sales",
+      "api_access_token": null
     }
   ]
 }

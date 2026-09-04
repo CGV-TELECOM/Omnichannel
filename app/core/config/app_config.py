@@ -78,6 +78,12 @@ class Settings:
     CHATWOOT_USER_API_TOKEN: str | None = _sanitize_chatwoot_env(
         os.getenv("CHATWOOT_USER_API_TOKEN")
     )
+    # Token user AI Bot (vd Techie A.I) — dùng khi OmniHub gửi tin KG/picker.
+    # Chatwoot gắn sender = chủ api_access_token; thiếu thì fallback CHATWOOT_USER_API_TOKEN
+    # (tin sẽ hiện tên admin tích hợp, vd BerlinHoang).
+    CHATWOOT_BOT_API_TOKEN: str | None = _sanitize_chatwoot_env(
+        os.getenv("CHATWOOT_BOT_API_TOKEN")
+    )
     # Tùy chọn: id user Chatwoot (số) tương ứng CHATWOOT_USER_API_TOKEN — tránh gọi GET /api/v1/profile
     CHATWOOT_INTEGRATION_USER_ID: int | None = _optional_positive_int_env(
         "CHATWOOT_INTEGRATION_USER_ID"

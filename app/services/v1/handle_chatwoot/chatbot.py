@@ -7,8 +7,11 @@ Nguồn sự thật: assignee trên messaging.
 - Không có KG agent active → không auto-assign bot (chat thuần người)
 
 Bot config theo tenant (meta_data):
-- messaging_bots: [{ key, agent_uuid, is_default, label, tenant_kg_agent_id? }]
+- messaging_bots: [{ key, agent_uuid, is_default, label, tenant_kg_agent_id?,
+  api_access_token? }]
 - chatbot_enabled / default_responder
+- Gửi tin KG: ưu tiên messaging_bots[].api_access_token (đúng tên bot trên widget),
+  rồi CHATWOOT_BOT_API_TOKEN, rồi CHATWOOT_USER_API_TOKEN (admin — tránh dùng cho tin khách)
 
 KG persona (tenant_kg_agents):
 - Sticky trên conversation.custom_attributes: kg_agent_id, tenant_kg_agent_id,
@@ -36,8 +39,9 @@ from app.core.config.app_config import settings
 from app.core.redis.redis_config import RedisHelper
 from app.db.models import Tenant
 from app.integrations.chatwoot import client as chatwoot_client
-from app.schemas.requests.tenant import MessagingBotEntry
+from app.schemas.requests.tenant import MessagingBotEntry, MessagingBotPublic
 from app.services.v1.handle_chatwoot._shared import (
+    _chatwoot_agent_id_to_local_map,
     _map_tenant_agent_by_local,
     _map_user_by_local,
     _translate_local_agent_uuids_to_remote,
@@ -64,12 +68,48 @@ KG_ATTR_PENDING = "kg_persona_pending"
 
 
 def default_tenant_bot_meta() -> dict[str, Any]:
-    """Meta chatbot mặc định: có field messaging_bots (rỗng) — không ép dùng bot."""
+    """Meta chatbot mặc định khi tạo tenant — messaging_bots=[] đủ field sau normalize."""
     return {
         "chatbot_enabled": True,
         "default_responder": "agent",
         "messaging_bots": list(DEFAULT_MESSAGING_BOTS),
     }
+
+
+async def backfill_messaging_bots_token_field(
+    db: AsyncSession,
+    *,
+    commit: bool = True,
+) -> dict[str, int]:
+    """
+    Chuẩn hóa mọi tenant: messaging_bots[] luôn có api_access_token (null nếu chưa có).
+    Không tự sinh token — chỉ đảm bảo shape.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+    from sqlalchemy import select
+
+    changed = 0
+    scanned = 0
+    q = await db.execute(select(Tenant))
+    tenants = list(q.scalars().unique().all())
+    for tenant in tenants:
+        scanned += 1
+        meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+        new_meta, did = normalize_messaging_bots_meta(meta)
+        # Force serialize kể cả khi list rỗng / chỉ thiếu key null
+        entries = parse_tenant_messaging_bots(new_meta)
+        serialized = messaging_bots_to_meta_list(entries)
+        if new_meta.get("messaging_bots") != serialized:
+            new_meta["messaging_bots"] = serialized
+            did = True
+        if not did:
+            continue
+        tenant.meta_data = new_meta
+        flag_modified(tenant, "meta_data")
+        changed += 1
+    if commit and changed:
+        await db.commit()
+    return {"scanned": scanned, "updated": changed}
 
 
 def coerce_assignee_id(raw: Any) -> int | None:
@@ -174,6 +214,11 @@ def parse_tenant_messaging_bots(meta: dict[str, Any] | None) -> list[MessagingBo
             key = str(item.get("key") or "default").strip() or "default"
             label = item.get("label")
             kg_row_id = _parse_uuid(item.get("tenant_kg_agent_id"))
+            raw_tok = item.get("api_access_token")
+            token = None
+            if raw_tok is not None:
+                tok = str(raw_tok).strip()
+                token = tok[:512] if tok else None
             entries.append(
                 MessagingBotEntry(
                     key=key[:64],
@@ -181,6 +226,7 @@ def parse_tenant_messaging_bots(meta: dict[str, Any] | None) -> list[MessagingBo
                     is_default=bool(item.get("is_default")),
                     label=(str(label)[:128] if label else None),
                     tenant_kg_agent_id=kg_row_id,
+                    api_access_token=token,
                 )
             )
 
@@ -215,18 +261,166 @@ def parse_tenant_messaging_bots(meta: dict[str, Any] | None) -> list[MessagingBo
 def messaging_bots_to_meta_list(
     entries: list[MessagingBotEntry],
 ) -> list[dict[str, Any]]:
+    """Serialize bots — luôn có key api_access_token (null nếu chưa cấu hình)."""
+    out: list[dict[str, Any]] = []
+    for e in entries:
+        tok = (e.api_access_token or "").strip()[:512] or None
+        out.append(
+            {
+                "key": e.key[:64],
+                "agent_uuid": str(e.agent_uuid),
+                "is_default": bool(e.is_default),
+                "label": e.label,
+                "tenant_kg_agent_id": (
+                    str(e.tenant_kg_agent_id) if e.tenant_kg_agent_id else None
+                ),
+                "api_access_token": tok,
+            }
+        )
+    return out
+
+
+def messaging_bots_public_list(
+    entries: list[MessagingBotEntry],
+) -> list[MessagingBotPublic]:
+    """GET settings — không lộ raw token."""
     return [
-        {
-            "key": e.key[:64],
-            "agent_uuid": str(e.agent_uuid),
-            "is_default": bool(e.is_default),
-            "label": e.label,
-            "tenant_kg_agent_id": (
-                str(e.tenant_kg_agent_id) if e.tenant_kg_agent_id else None
-            ),
-        }
+        MessagingBotPublic(
+            key=e.key,
+            agent_uuid=e.agent_uuid,
+            is_default=e.is_default,
+            label=e.label,
+            tenant_kg_agent_id=e.tenant_kg_agent_id,
+            has_api_access_token=bool((e.api_access_token or "").strip()),
+        )
         for e in entries
     ]
+
+
+def merge_messaging_bots_preserving_tokens(
+    incoming: list[Any],
+    previous_meta: dict[str, Any] | None,
+) -> list[MessagingBotEntry]:
+    """
+    PATCH messaging_bots (full replace) nhưng giữ token cũ khi client không gửi lại.
+
+    - omit / null api_access_token → giữ token theo agent_uuid (nếu có)
+    - \"\" → xóa token
+    - chuỗi non-empty → ghi mới
+    """
+    prev_token: dict[str, str] = {}
+    for e in parse_tenant_messaging_bots(previous_meta):
+        tok = (e.api_access_token or "").strip()
+        if tok:
+            prev_token[str(e.agent_uuid)] = tok
+
+    entries: list[MessagingBotEntry] = []
+    for item in incoming:
+        token_specified = False
+        token_val: str | None = None
+        if isinstance(item, MessagingBotEntry):
+            token_specified = "api_access_token" in item.model_fields_set
+            token_val = item.api_access_token
+            entry = item
+        elif isinstance(item, dict):
+            token_specified = "api_access_token" in item
+            raw = item.get("api_access_token")
+            token_val = None if raw is None else str(raw)
+            entry = MessagingBotEntry.model_validate(
+                {k: v for k, v in item.items() if k != "api_access_token"}
+                | {"api_access_token": None}
+            )
+        else:
+            entry = MessagingBotEntry.model_validate(
+                {
+                    "key": getattr(item, "key", "default"),
+                    "agent_uuid": getattr(item, "agent_uuid"),
+                    "is_default": getattr(item, "is_default", False),
+                    "label": getattr(item, "label", None),
+                    "tenant_kg_agent_id": getattr(item, "tenant_kg_agent_id", None),
+                }
+            )
+            token_specified = False
+
+        uid = str(entry.agent_uuid)
+        if token_specified:
+            if token_val is None:
+                # explicit null → giữ cũ (cùng omit)
+                entry.api_access_token = prev_token.get(uid)
+            else:
+                cleaned = str(token_val).strip()
+                entry.api_access_token = cleaned[:512] if cleaned else None
+        else:
+            entry.api_access_token = prev_token.get(uid)
+        entries.append(entry)
+    return entries
+
+
+async def resolve_bot_reply_access_token(
+    db: AsyncSession,
+    tenant: Tenant,
+    *,
+    assignee_chatwoot_id: int | None = None,
+) -> str | None:
+    """
+    Token gửi tin bot trên widget (sender = chủ token).
+
+    1. messaging_bots khớp assignee (có api_access_token)
+    2. default bot có token
+    3. bot bất kỳ có token
+    4. CHATWOOT_BOT_API_TOKEN (fallback server — single-bot / legacy)
+    """
+    meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
+    bots = parse_tenant_messaging_bots(meta)
+    if not bots:
+        bot_env = (settings.CHATWOOT_BOT_API_TOKEN or "").strip()
+        return bot_env or None
+
+    by_uuid: dict[UUID, MessagingBotEntry] = {e.agent_uuid: e for e in bots}
+
+    def _tok(e: MessagingBotEntry | None) -> str | None:
+        if e is None:
+            return None
+        t = (e.api_access_token or "").strip()
+        return t or None
+
+    if assignee_chatwoot_id is not None:
+        cw_map = await _chatwoot_agent_id_to_local_map(db, tenant.id)
+        local = cw_map.get(int(assignee_chatwoot_id))
+        if local is not None:
+            hit = _tok(by_uuid.get(local))
+            if hit:
+                return hit
+        # USER map fallback (agent sync từ user)
+        from app.db.models import ChatwootLegacyMap, ChatwootMapResourceType
+        from sqlalchemy import and_, select
+
+        q = await db.execute(
+            select(ChatwootLegacyMap.local_uuid).where(
+                and_(
+                    ChatwootLegacyMap.resource_type == ChatwootMapResourceType.USER,
+                    ChatwootLegacyMap.chatwoot_id == int(assignee_chatwoot_id),
+                )
+            )
+        )
+        user_local = q.scalar_one_or_none()
+        if user_local is not None:
+            hit = _tok(by_uuid.get(user_local))
+            if hit:
+                return hit
+
+    for e in bots:
+        if e.is_default:
+            hit = _tok(e)
+            if hit:
+                return hit
+    for e in bots:
+        hit = _tok(e)
+        if hit:
+            return hit
+
+    bot_env = (settings.CHATWOOT_BOT_API_TOKEN or "").strip()
+    return bot_env or None
 
 
 def normalize_messaging_bots_meta(meta: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
@@ -741,12 +935,20 @@ async def maybe_handle_persona_selection(
                 )
             )
         )
+        reply_token = await resolve_bot_reply_access_token(
+            db,
+            tenant,
+            assignee_chatwoot_id=coerce_assignee_id(
+                extract_assignee_id(conversation_payload)
+            ),
+        )
         if looks_like_choice:
             await send_persona_picker_message(
                 account_id,
                 conversation_id,
                 personas,
                 greeting="Mình chưa nhận ra lựa chọn. Vui lòng chọn lại:",
+                access_token=reply_token,
             )
             return True, "persona_invalid_choice"
         return True, "persona_awaiting_choice"
@@ -760,10 +962,18 @@ async def maybe_handle_persona_selection(
         pending=False,
     )
     label = chosen.label or chosen.key
+    reply_token = await resolve_bot_reply_access_token(
+        db,
+        tenant,
+        assignee_chatwoot_id=coerce_assignee_id(
+            extract_assignee_id(conversation_payload)
+        ),
+    )
     await send_chatwoot_reply(
         account_id,
         conversation_id,
         f"Đã chọn: {label}. Bạn có thể bắt đầu trò chuyện.",
+        access_token=reply_token,
     )
     ca = dict(attrs)
     ca[KG_ATTR_AGENT_ID] = str(chosen.kg_agent_id)
@@ -909,8 +1119,18 @@ async def after_bot_assigned_setup_persona(
             conversation_id,
             pending=True,
         )
+        reply_token = await resolve_bot_reply_access_token(
+            db,
+            tenant,
+            assignee_chatwoot_id=coerce_assignee_id(
+                extract_assignee_id(conversation_payload)
+            ),
+        )
         sent = await send_persona_picker_message(
-            account_id, conversation_id, personas
+            account_id,
+            conversation_id,
+            personas,
+            access_token=reply_token,
         )
         if not sent:
             logger.warning(
@@ -1243,10 +1463,16 @@ async def claim_and_reply_omnihub_kg(
         # Giữ claim — webhook retry cùng msg không được gửi lại sau khi đã gọi KG
         return False, f"assignee_changed:{current}"
 
+    reply_token = await resolve_bot_reply_access_token(
+        db,
+        tenant,
+        assignee_chatwoot_id=coerce_assignee_id(current),
+    )
     ok = await send_chatwoot_reply(
         account_id=account_id,
         conversation_id=int(conversation_id),
         reply_text=reply_text,
+        access_token=reply_token,
     )
     if not ok:
         await _release_incoming_message_claim(account_id, message_id)
@@ -1333,6 +1559,12 @@ async def call_kg_chatbot_core(
     return None
 
 
+def _env_bot_reply_access_token() -> str | None:
+    """Fallback server-level (legacy / single bot)."""
+    bot = (settings.CHATWOOT_BOT_API_TOKEN or "").strip()
+    return bot or None
+
+
 async def send_chatwoot_reply(
     account_id: int,
     conversation_id: int,
@@ -1340,8 +1572,14 @@ async def send_chatwoot_reply(
     *,
     content_type: str | None = None,
     content_attributes: dict[str, Any] | None = None,
+    access_token: str | None = None,
 ) -> bool:
-    """Gửi tin outgoing (bot) lên messaging. Hỗ trợ input_select cho live chat."""
+    """
+    Gửi tin outgoing (bot) lên messaging. Hỗ trợ input_select cho live chat.
+
+    access_token: ưu tiên token bot tenant (resolve_bot_reply_access_token);
+    None → CHATWOOT_BOT_API_TOKEN → CHATWOOT_USER_API_TOKEN.
+    """
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages"
     payload: dict[str, Any] = {
         "content": reply_text,
@@ -1351,7 +1589,13 @@ async def send_chatwoot_reply(
         payload["content_type"] = content_type
     if content_attributes:
         payload["content_attributes"] = content_attributes
-    res = await chatwoot_client.application_request("POST", path, json_body=payload)
+    token = (access_token or "").strip() or _env_bot_reply_access_token()
+    res = await chatwoot_client.application_request(
+        "POST",
+        path,
+        json_body=payload,
+        access_token=token,
+    )
     if res.status_code not in (200, 201):
         logger.error(
             "Gửi tin bot thất bại conv=%s: %s",
@@ -1368,6 +1612,7 @@ async def send_persona_picker_message(
     personas: list[Any],
     *,
     greeting: str | None = None,
+    access_token: str | None = None,
 ) -> bool:
     """
     Menu chọn persona — labels lấy từ DB (không hardcode).
@@ -1391,6 +1636,7 @@ async def send_persona_picker_message(
         greeting_text,
         content_type="input_select",
         content_attributes={"items": items},
+        access_token=access_token,
     )
     if ok:
         return True
@@ -1399,6 +1645,7 @@ async def send_persona_picker_message(
         account_id,
         conversation_id,
         build_persona_picker_message(personas, greeting=greeting_text),
+        access_token=access_token,
     )
 
 

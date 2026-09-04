@@ -125,9 +125,14 @@ async def application_request(
     *,
     json_body: dict[str, Any] | None = None,
     params: dict[str, Any] | list[tuple[str, Any]] | None = None,
+    access_token: str | None = None,
 ) -> ChatwootResult:
+    """
+    Application API. Mặc định CHATWOOT_USER_API_TOKEN (admin tích hợp).
+    Truyền access_token để gửi thay mặt user/bot khác (sender trên widget = chủ token).
+    """
     base = _base_url()
-    token = settings.CHATWOOT_USER_API_TOKEN
+    token = (access_token or "").strip() or settings.CHATWOOT_USER_API_TOKEN
     if not base:
         return ChatwootResult(
             503, {"description": "CHATWOOT_BASE_URL chưa cấu hình"}, "", ""

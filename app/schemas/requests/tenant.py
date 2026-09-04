@@ -145,6 +145,29 @@ class MessagingBotEntry(BaseModel):
         default=None,
         description="FK tenant_kg_agents.id — KG agent dùng khi bot này reply.",
     )
+    api_access_token: Optional[str] = Field(
+        default=None,
+        max_length=512,
+        description=(
+            "Chatwoot user Access Token của agent bot này — OmniHub dùng khi gửi tin KG "
+            "để widget hiện đúng tên bot. Write-only: GET settings không trả raw token. "
+            "PATCH: bỏ field/null = giữ token cũ theo agent_uuid; \"\" = xóa; chuỗi = ghi mới."
+        ),
+    )
+
+
+class MessagingBotPublic(BaseModel):
+    """Bot config trả client — không lộ api_access_token."""
+
+    key: str
+    agent_uuid: UUID
+    is_default: bool = False
+    label: Optional[str] = None
+    tenant_kg_agent_id: Optional[UUID] = None
+    has_api_access_token: bool = Field(
+        default=False,
+        description="True nếu tenant đã cấu hình token gửi tin cho bot này.",
+    )
 
 
 class TenantKgAgentsReplaceBody(BaseModel):
@@ -176,7 +199,8 @@ class TenantOwnSettingsUpdate(BaseModel):
         description=(
             "Danh sách agent được phép coi là bot (UUID map). "
             "Gửi full list để thay thế; `[]` = tenant không dùng AI Bot. "
-            "Thêm nhiều bot sau này bằng cách bổ sung phần tử (một is_default)."
+            "Thêm nhiều bot sau này bằng cách bổ sung phần tử (một is_default). "
+            "api_access_token: omit/null giữ cũ; \"\" xóa; chuỗi ghi mới."
         ),
     )
 
@@ -185,4 +209,4 @@ class TenantOwnSettingsResponse(BaseModel):
     conversation_rating_enabled: bool
     chatbot_enabled: bool
     default_responder: Literal["bot", "agent"]
-    messaging_bots: list[MessagingBotEntry] = Field(default_factory=list)
+    messaging_bots: list[MessagingBotPublic] = Field(default_factory=list)

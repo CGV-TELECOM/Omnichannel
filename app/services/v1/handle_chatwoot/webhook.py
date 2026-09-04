@@ -28,6 +28,18 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
             account_id = payload["account"].get("id")
         if account_id is None:
             account_id = payload.get("account_id")
+        # conversation_updated đôi khi chỉ có account_id trong messages[]
+        if account_id is None:
+            messages = payload.get("messages")
+            if isinstance(messages, list):
+                for msg in messages:
+                    if isinstance(msg, dict) and msg.get("account_id") is not None:
+                        account_id = msg.get("account_id")
+                        break
+        if account_id is None:
+            inbox = payload.get("inbox")
+            if isinstance(inbox, dict):
+                account_id = inbox.get("account_id")
 
         if not account_id:
             logger.warning("Payload webhook của messaging không có account ID: %s", payload)
