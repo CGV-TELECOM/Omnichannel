@@ -117,27 +117,39 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
 
         # 4b. Tin khách → Reply Gate OmniHub KG
         elif event_type == "message_created" and is_incoming_customer_message(payload):
+            from app.services.v1.handle_chatwoot.chatbot import (
+                extract_persona_choice_text,
+                fetch_conversation_assignee_id,
+            )
+
             conversation_payload = payload.get("conversation") or {}
             if not isinstance(conversation_payload, dict):
                 conversation_payload = {}
             conversation_id = conversation_payload.get("id") or payload.get(
                 "conversation_id"
             )
-            message_content = (payload.get("content") or "").strip()
+            # input_select: ưu tiên submitted_values[].value (opaque persona row id)
+            message_content = extract_persona_choice_text(payload)
             message_id = payload.get("id")
 
             if conversation_id and message_content:
+                just_sent_picker = False
                 if extract_assignee_id(conversation_payload) is None:
-                    await maybe_auto_assign_ai_bot(
+                    _ok, assign_detail = await maybe_auto_assign_ai_bot(
                         db,
                         tenant_id=tenant_id,
                         account_id=account_id_int,
                         conversation_id=int(conversation_id),
                         conversation_payload=conversation_payload,
                     )
-                    from app.services.v1.handle_chatwoot.chatbot import (
-                        fetch_conversation_assignee_id,
-                    )
+                    # Cùng webhook vừa gửi menu → tin mở chat này không phải lựa chọn
+                    if "persona_picker_sent" in str(assign_detail):
+                        just_sent_picker = True
+                        logger.info(
+                            "Skip KG/persona-match (picker vừa gửi) conv=%s msg=%s",
+                            conversation_id,
+                            message_id,
+                        )
 
                     aid = await fetch_conversation_assignee_id(
                         account_id_int, int(conversation_id)
@@ -149,15 +161,16 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                             "assignee_id": aid,
                         }
 
-                await claim_and_reply_omnihub_kg(
-                    db,
-                    tenant_id=tenant_id,
-                    account_id=account_id_int,
-                    conversation_id=int(conversation_id),
-                    conversation_payload=conversation_payload,
-                    message_content=message_content,
-                    message_id=message_id,
-                )
+                if not just_sent_picker:
+                    await claim_and_reply_omnihub_kg(
+                        db,
+                        tenant_id=tenant_id,
+                        account_id=account_id_int,
+                        conversation_id=int(conversation_id),
+                        conversation_payload=conversation_payload,
+                        message_content=message_content,
+                        message_id=message_id,
+                    )
 
         # 4c. Assignee đổi → sync bot flags (backup nếu assign ngoài OmniHub)
         elif event_type == "conversation_updated":

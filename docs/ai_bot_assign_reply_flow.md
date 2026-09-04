@@ -65,6 +65,217 @@ API settings:
 
 ---
 
+## 3b. KG persona (đa agent / tenant)
+
+**Mục tiêu:** một tenant / graph có nhiều `kg_agent_id`. Live chat (web widget) nếu ≥2 type → khách chọn → sticky → mọi tin sau gọi đúng agent trên `KG_CORE_URL`.
+
+**Script Chatwoot giữ nguyên** (copy từ Chatwoot: `websiteToken` + `chatwootSDK.run`). Không cần sửa HTML embed. Menu lấy **động từ DB** (`tenant_kg_agents.label`), backend gửi trong hội thoại.
+
+### Luồng native (khuyến nghị — không đụng script)
+
+```text
+conversation_created
+  → assign AI Bot (nếu policy)
+  → 1 persona: sticky default
+  → ≥2 + live chat: set kg_persona_pending + gửi input_select (hoặc text 1/2/…)
+
+message_created (incoming)
+  → nếu vừa gửi picker cùng request → skip (tin mở chat)
+  → nếu pending: khớp số / label / key / value input_select → sticky + ack
+  → nếu đã sticky: Reply Gate → KG với kg_agent_id đó
+```
+
+Khách **bấm lựa chọn** trên widget (Chatwoot `input_select`) hoặc gõ `1` / label. Admin đổi label qua `PUT /api/v1/tenants/{id}/kg-agents` → menu lần sau đổi theo DB.
+
+**Bảng:** `tenant_kg_agents` (0..n per tenant; optional `inbox_id` scope).
+
+**Sticky trên conversation `custom_attributes`:**
+
+| Key | Ý nghĩa |
+|-----|---------|
+| `kg_agent_id` | UUID gửi KG Core |
+| `tenant_kg_agent_id` | PK row OmniHub |
+| `kg_persona_key` | key logic (`student`, …) |
+| `kg_persona_pending` | `true` khi live chat đang chờ chọn |
+
+**Resolve order khi gọi `KG_CORE_URL`:**
+
+1. Sticky `kg_agent_id` / `tenant_kg_agent_id` trên conversation  
+2. (pending = true → **không** gọi KG)  
+3. `messaging_bots[assignee].tenant_kg_agent_id`  
+4. Default trong scope inbox → default tenant  
+5. `null` → skip
+
+**Hành vi theo kênh:**
+
+| Điều kiện | Live chat (web widget) | Kênh khác |
+|-----------|------------------------|-----------|
+| Không bot / không KG | Thuần người | Thuần người |
+| 1 persona | Auto sticky | Auto sticky |
+| ≥2 persona | Menu chọn (DB); sticky sau chọn | Auto default |
+
+**Nhúng widget nhiều domain khách (CORS):** snippet tái sử dụng (dev + prod Chatwoot):
+
+```text
+nginx/snippets/chatwoot_widget_cors_map.conf        → include ngoài server {}
+nginx/snippets/chatwoot_widget_cors_locations.conf → include trong server 443, trước location /
+scripts/install_chatwoot_widget_cors.sh
+```
+
+Máy prod Chatwoot: copy 2 snippet + include (upstream `backend_chatwoot`). Xem `nginx/chatwoot.prod.example.conf` và `scripts/install_chatwoot_widget_cors.sh`. Dev `devchat.telesip.vn` đã gắn sẵn trong `nginx/devchat.telesip.vn.conf`. Không có vhost prod trên máy OmniHub này — chạy script trên host nginx Chatwoot prod.
+
+**HMAC visitor:** sync inbox tự `PATCH` `{ "channel": { "hmac_mandatory": false } }` trên web widget (body phẳng bị Chatwoot bỏ qua). Overlay `setUser(oh_…)` không cần identity token. Không bật “Require identity validation” trên inbox live chat anonymous.
+
+**Public API — overlay chọn trước (`client_session` + Redis + `setUser`):**
+
+```http
+GET  /api/v1/public/live-chat/{website_token}/personas
+POST /api/v1/public/live-chat/{website_token}/personas/select
+```
+
+Script Chatwoot giữ nguyên — FE trì hoãn inject đến sau khi chọn, rồi `setUser` (không cần `setCustomAttributes`).
+
+`GET` (gọn cho FE):
+
+```json
+{
+  "selection_mode": "picker",
+  "greeting": null,
+  "inbox_name": "…",
+  "website_token": "…",
+  "client_session_prefix": "oh_",
+  "client_session_ttl_seconds": 3600,
+  "personas": [
+    { "id": "<opaque>", "key": "student", "label": "Tôi là học viên", "is_default": true }
+  ]
+}
+```
+
+`greeting` luôn `null`: câu chào lấy từ **inbox Chatwoot** (Greeting message / pre-chat). Overlay chỉ render `personas[].label`. Không làm CMS greeting theo locale trên OmniHub.
+
+`POST` body:
+
+```json
+{
+  "persona_id": "<personas[].id>",
+  "client_session_id": "<uuid hoặc oh_+uuid>",
+  "meta": { "campaign": "optional" }
+}
+```
+
+`POST` response (gọn):
+
+```json
+{
+  "client_session_id": "oh_…",
+  "expires_in": 3600,
+  "persisted": true,
+  "fallback_mode": null,
+  "persona_id": "…",
+  "persona": { "id": "…", "key": "student", "label": "…", "is_default": true }
+}
+```
+
+Luôn dùng **`data.client_session_id`** cho `setUser`.  
+`persisted=false` → Redis lỗi; vẫn mở widget, backend gửi menu trong chat.
+
+Env (tùy chọn):
+
+| Biến | Mặc định | Ý nghĩa |
+|------|----------|---------|
+| `LIVE_CHAT_PERSONA_SELECT_TTL_SECONDS` | `3600` (1h) | TTL Redis cửa sổ chờ mở widget |
+| `LIVE_CHAT_CLIENT_SESSION_PREFIX` | `oh_` | Prefix identifier `setUser` |
+
+#### Ma trận lỗi / fallback
+
+| Tình huống | Hành vi |
+|------------|---------|
+| Redis down lúc POST select | 200, `persisted=false`, `fallback_mode=in_chat_picker` → mở widget → menu trong chat |
+| Redis down / miss lúc webhook | Menu `input_select` trong chat |
+| TTL hết trước khi mở widget | Chọn lại ngoài hoặc chọn trong chat |
+| Persona đã tắt sau khi select | Bỏ preselect → menu / default |
+| Gửi menu Chatwoot lỗi | `pending=true` vẫn chặn KG đến khi chọn được |
+| Rate-limit Redis down | Fail-open (không chặn visitor) |
+| 1 persona | Auto sticky, không hỏi |
+| Chat lâu sau sticky | OK — không phụ thuộc TTL Redis |
+
+#### FE tích hợp
+
+```text
+1. Chưa load script Chatwoot
+2. GET personas — picker → vẽ personas[].label
+3. client_session_id = crypto.randomUUID() (sessionStorage theo phiên trang)
+4. POST select { persona_id, client_session_id }
+5. Inject SDK → đợi chatwoot:ready → setUser(data.client_session_id) → mới toggle("open")
+6. Không mở widget trước setUser — thiếu identifier → bot gửi lại menu trong chat
+```
+
+Backend có **IP fallback** ngắn (~5 phút) nếu POST select và conversation cùng IP mà contact chưa có identifier; vẫn nên `setUser` đúng.
+
+Ví dụ JS:
+
+```javascript
+const websiteToken = "c4RWQ2z5KgxjZ88Hmx7bvKSA";
+const cwBase = "https://<chatwoot-host>";
+const api = "https://devomi.telesip.vn/api/v1/public/live-chat";
+
+function getRawSessionId() {
+  const k = "omnihub_cw_session";
+  let id = sessionStorage.getItem(k);
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem(k, id);
+  }
+  return id;
+}
+
+function injectChatwoot(canonicalSessionId) {
+  const s = document.createElement("script");
+  s.src = `${cwBase}/packs/js/sdk.js`;
+  s.defer = true;
+  s.onload = () => window.chatwootSDK.run({ websiteToken, baseUrl: cwBase });
+  document.body.appendChild(s);
+  window.addEventListener("chatwoot:ready", () => {
+    window.$chatwoot.setUser(canonicalSessionId);
+    window.$chatwoot.toggle("open");
+  });
+}
+
+async function start() {
+  const cat = await fetch(`${api}/${websiteToken}/personas`).then((r) => r.json());
+  const data = cat.data;
+  const rawSession = getRawSessionId();
+
+  if (data.selection_mode !== "picker") {
+    // auto/off: vẫn setUser ổn định
+    injectChatwoot(`oh_${rawSession}`);
+    return;
+  }
+
+  showPersonaButtons(data.personas, async (persona) => {
+    const sel = await fetch(`${api}/${websiteToken}/personas/select`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        persona_id: persona.id,
+        client_session_id: rawSession,
+      }),
+    }).then((r) => r.json());
+    // Quan trọng: dùng id canonical từ backend
+    injectChatwoot(sel.data.client_session_id);
+  });
+}
+```
+
+Cần sync binding (admin):
+
+```http
+GET  /api/v1/messaging/tenants/{tenant_id}/inboxes
+POST /api/v1/messaging/tenants/{tenant_id}/inboxes/sync-bindings
+```
+
+---
+
 ## 3. Flow tổng quan
 
 ```mermaid

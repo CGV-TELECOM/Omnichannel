@@ -189,6 +189,7 @@ async def apply_tenant_kg_agents_sync(
             db.add(row)
         row.kg_agent_id = entry.kg_agent_id
         row.graph_id = entry.graph_id
+        row.inbox_id = entry.inbox_id
         row.label = entry.label
         row.is_default = bool(entry.is_default)
         row.is_active = bool(entry.is_active)
@@ -224,6 +225,7 @@ def kg_agent_row_to_response(row: TenantKgAgent) -> TenantKgAgentResponse:
         tenant_id=row.tenant_id,
         kg_agent_id=row.kg_agent_id,
         graph_id=row.graph_id,
+        inbox_id=row.inbox_id,
         key=row.key,
         label=row.label,
         is_default=bool(row.is_default),
@@ -231,6 +233,51 @@ def kg_agent_row_to_response(row: TenantKgAgent) -> TenantKgAgentResponse:
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+async def load_active_kg_personas(
+    db: AsyncSession,
+    tenant_id: UUID,
+    *,
+    inbox_id: int | None = None,
+) -> list[TenantKgAgent]:
+    """
+    Catalog persona active.
+    inbox_id set → rows (inbox_id IS NULL OR inbox_id = ?) — ưu tiên đúng inbox khi resolve default.
+    """
+    rows = await load_tenant_kg_agents(db, tenant_id)
+    active = [r for r in rows if r.is_active]
+    if inbox_id is None:
+        return active
+    scoped = [r for r in active if r.inbox_id is None or int(r.inbox_id) == int(inbox_id)]
+    return scoped
+
+
+async def resolve_default_kg_agent_row(
+    db: AsyncSession,
+    tenant_id: UUID,
+    *,
+    inbox_id: int | None = None,
+) -> TenantKgAgent | None:
+    active = await load_active_kg_personas(db, tenant_id, inbox_id=inbox_id)
+    if not active:
+        return None
+    # Ưu tiên default trong scope inbox cụ thể, rồi default chung, rồi single
+    inbox_defaults = [
+        r
+        for r in active
+        if r.is_default and inbox_id is not None and r.inbox_id is not None
+        and int(r.inbox_id) == int(inbox_id)
+    ]
+    if inbox_defaults:
+        return inbox_defaults[0]
+    for row in active:
+        if row.is_default:
+            return row
+    if len(active) == 1:
+        return active[0]
+    return None
+
 
 
 async def load_tenant_kg_agents(
@@ -265,15 +312,11 @@ async def load_kg_agents_map(
 async def resolve_default_kg_agent_id(
     db: AsyncSession,
     tenant_id: UUID,
+    *,
+    inbox_id: int | None = None,
 ) -> UUID | None:
-    rows = await load_tenant_kg_agents(db, tenant_id)
-    active = [r for r in rows if r.is_active]
-    for row in active:
-        if row.is_default:
-            return row.kg_agent_id
-    if len(active) == 1:
-        return active[0].kg_agent_id
-    return None
+    row = await resolve_default_kg_agent_row(db, tenant_id, inbox_id=inbox_id)
+    return row.kg_agent_id if row else None
 
 
 async def resolve_kg_agent_id_by_row_id(

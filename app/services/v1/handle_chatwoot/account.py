@@ -31,6 +31,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _platform_account_payload_provision,
     _platform_account_payload_update,
     _resolve_account_id,
+    _tenant_application_forward,
     _translate_local_agent_uuids_to_remote,
     link_integration_user_to_chatwoot_account,
 )
@@ -679,6 +680,110 @@ async def bulk_action_account(
             ResponseStatusCode.INTERNAL_SERVER_ERROR,
             f"Lỗi không xác định: {e}",
         )
+
+async def list_inbox_members(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    inbox_id: int,
+    db: AsyncSession,
+):
+    """GET /api/v1/accounts/{account_id}/inbox_members/{inbox_id}"""
+    return await _tenant_application_forward(
+        current_user,
+        tenant_id,
+        db,
+        request=request,
+        method="GET",
+        path_suffix=f"/inbox_members/{int(inbox_id)}",
+        forward_all_query_params=True,
+        redact_agents=True,
+        extra_response={"inbox_id": int(inbox_id)},
+        ok_message="Danh sách agent trong inbox",
+        error_message="Không lấy được danh sách agent trong inbox từ messaging",
+    )
+
+
+async def remove_inbox_members(
+    request: Request,
+    current_user: User,
+    tenant_id: UUID,
+    body: ChatwootActionAgentInboxesBody,
+    db: AsyncSession,
+):
+    """DELETE /api/v1/accounts/{account_id}/inbox_members — cùng body POST/PATCH."""
+    try:
+        if not await is_platform_admin(current_user, db):
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Chỉ quản trị viên mới thực hiện được thao tác này",
+            )
+
+        account_id, _ = await _resolve_account_id(db, tenant_id)
+        if account_id is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Chưa có map messaging account cho tenant này",
+            )
+
+        remote_user_ids, missing_uuids = await _translate_local_agent_uuids_to_remote(
+            db, tenant_id, body.user_ids
+        )
+        if missing_uuids:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                f"Không tìm thấy map agent cho các UUID sau: {', '.join(missing_uuids)}",
+            )
+
+        payload = {
+            "inbox_id": body.inbox_id,
+            "user_ids": remote_user_ids,
+        }
+        pairs = _forward_all_query_pairs(request)
+        res = await chatwoot_client.application_request(
+            "DELETE",
+            f"/api/v1/accounts/{account_id}/inbox_members",
+            json_body=payload,
+            params=pairs or None,
+        )
+        if res.status_code in (200, 201, 204):
+            return api_response(
+                ResponseStatus.SUCCESS,
+                ResponseStatusCode.OK,
+                "Gỡ agent khỏi inbox thành công",
+                {
+                    "tenant_id": str(tenant_id),
+                    "messaging_account_id": account_id,
+                    "result": res.data,
+                },
+            )
+        return api_response(
+            ResponseStatus.ERROR,
+            res.status_code if res.status_code in (401, 404, 503) else 502,
+            "Gỡ agent khỏi inbox thất bại",
+            _chatwoot_error_payload(
+                res,
+                sent_payload_keys=sorted(payload.keys(), key=str),
+            ),
+        )
+    except SQLAlchemyError as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi CSDL: {e}",
+        )
+    except Exception as e:
+        await db.rollback()
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi không xác định: {e}",
+        )
+
 
 async def add_new_agent_inboxes(
     request: Request,

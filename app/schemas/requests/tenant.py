@@ -13,6 +13,10 @@ class TenantKgAgentInput(BaseModel):
         default=None,
         description="Graph override; null → dùng tenant.graph_id",
     )
+    inbox_id: Optional[int] = Field(
+        default=None,
+        description="Giới hạn persona theo inbox messaging; null = mọi kênh",
+    )
     label: Optional[str] = Field(default=None, max_length=128)
     is_default: bool = Field(default=False)
     is_active: bool = Field(default=True)

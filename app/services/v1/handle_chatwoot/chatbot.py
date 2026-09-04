@@ -4,11 +4,17 @@ OmniHub AI Bot control.
 Nguồn sự thật: assignee trên messaging.
 - Assignee ∈ bot ids của **tenant** (resolve từ messaging_bots) → KG được phép trả lời
 - Assignee = người / null → bot không trả lời
-- Label is_bot_active / bot-active chỉ phụ trợ UI, không thắng assignee người
+- Không có KG agent active → không auto-assign bot (chat thuần người)
 
-Bot config theo tenant (meta_data) — nguồn duy nhất:
-- messaging_bots: [{ key, agent_uuid, is_default, label }]  (mặc định [])
-  Tenant không dùng bot → để []. Thêm phần tử khi bật AI Bot / multi-bot sau này.
+Bot config theo tenant (meta_data):
+- messaging_bots: [{ key, agent_uuid, is_default, label, tenant_kg_agent_id? }]
+- chatbot_enabled / default_responder
+
+KG persona (tenant_kg_agents):
+- Sticky trên conversation.custom_attributes: kg_agent_id, tenant_kg_agent_id,
+  kg_persona_key, kg_persona_pending
+- Live chat (≥2 persona): gửi menu chọn; kênh khác / 1 persona: auto default
+- Resolve order: sticky → messaging_bot link → tenant/inbox default
 
 Reply idempotent theo Chatwoot message_id (Redis SET NX).
 
@@ -49,6 +55,12 @@ _LOCAL_CLAIM_MAX = 5000
 
 # Default meta keys cho tenant mới / normalize
 DEFAULT_MESSAGING_BOTS: list[dict[str, Any]] = []
+
+# Sticky persona trên conversation.custom_attributes
+KG_ATTR_AGENT_ID = "kg_agent_id"
+KG_ATTR_ROW_ID = "tenant_kg_agent_id"
+KG_ATTR_PERSONA_KEY = "kg_persona_key"
+KG_ATTR_PENDING = "kg_persona_pending"
 
 
 def default_tenant_bot_meta() -> dict[str, Any]:
@@ -411,12 +423,70 @@ async def resolve_kg_agent_id_for_assignee(
     tenant: Tenant,
     assignee_chatwoot_id: int | None,
 ) -> UUID | None:
-    """Map assignee bot → KG agent (tenant_kg_agent_id) hoặc default."""
+    """Legacy helper — ưu tiên bot messaging gắn KG, rồi default."""
+    result = await resolve_kg_agent_for_reply(
+        db,
+        tenant,
+        conversation_payload=None,
+        assignee_chatwoot_id=assignee_chatwoot_id,
+        inbox_id=None,
+    )
+    return result
+
+
+async def resolve_kg_agent_for_reply(
+    db: AsyncSession,
+    tenant: Tenant | None,
+    *,
+    conversation_payload: dict[str, Any] | None,
+    assignee_chatwoot_id: int | None,
+    inbox_id: int | None = None,
+) -> UUID | None:
+    """
+    Thứ tự resolve kg_agent_id cho KG_CORE_URL:
+      1. conversation.custom_attributes.kg_agent_id / tenant_kg_agent_id
+      2. default trong scope inbox (tenant_kg_agents)
+      3. messaging_bots[assignee].tenant_kg_agent_id
+      4. tenant default kg agent
+      5. None → không gọi KG
+    """
     from app.services.v1.handle_tenant_kg_agent import (
+        load_active_kg_personas,
         resolve_default_kg_agent_id,
         resolve_kg_agent_id_by_row_id,
     )
 
+    if tenant is None:
+        return None
+
+    attrs = extract_conversation_custom_attributes(conversation_payload)
+    sticky = _parse_uuid(attrs.get(KG_ATTR_AGENT_ID))
+    if sticky is not None:
+        # Validate còn active (tránh sticky trỏ agent đã tắt)
+        personas = await load_active_kg_personas(
+            db, tenant.id, inbox_id=inbox_id
+        )
+        if any(p.kg_agent_id == sticky for p in personas):
+            return sticky
+        # fallback: vẫn cho phép nếu đúng tenant active bất kỳ
+        all_personas = await load_active_kg_personas(db, tenant.id)
+        if any(p.kg_agent_id == sticky for p in all_personas):
+            return sticky
+
+    row_id = _parse_uuid(attrs.get(KG_ATTR_ROW_ID))
+    if row_id is not None:
+        kg_id = await resolve_kg_agent_id_by_row_id(db, tenant.id, row_id)
+        if kg_id is not None:
+            return kg_id
+
+    # Pending picker → chưa được phép gọi KG
+    if attrs.get(KG_ATTR_PENDING) is True or str(attrs.get(KG_ATTR_PENDING)).lower() in (
+        "true",
+        "1",
+    ):
+        return None
+
+    # messaging bot → tenant_kg_agent_id
     meta = tenant.meta_data if isinstance(tenant.meta_data, dict) else {}
     bots = parse_tenant_messaging_bots(meta)
     if assignee_chatwoot_id is not None and bots:
@@ -435,7 +505,427 @@ async def resolve_kg_agent_id_for_assignee(
             )
             if kg_id is not None:
                 return kg_id
-    return await resolve_default_kg_agent_id(db, tenant.id)
+
+    # Default theo inbox scope (null inbox_id trên row = mọi kênh)
+    return await resolve_default_kg_agent_id(db, tenant.id, inbox_id=inbox_id)
+
+
+def extract_conversation_custom_attributes(
+    payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    attrs = payload.get("custom_attributes")
+    if isinstance(attrs, dict):
+        return dict(attrs)
+    conv = payload.get("conversation")
+    if isinstance(conv, dict):
+        nested = conv.get("custom_attributes")
+        if isinstance(nested, dict):
+            return dict(nested)
+    return {}
+
+
+def _merge_attr_dicts(*dicts: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for d in dicts:
+        if isinstance(d, dict):
+            out.update(d)
+    return out
+
+
+def extract_visitor_persona_hints(
+    payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    Gộp custom_attributes từ conversation / contact / meta / additional_attributes.
+    FE overlay set: omnihub_persona_selection và/hoặc tenant_kg_agent_id.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    chunks: list[Any] = [
+        payload.get("custom_attributes"),
+        payload.get("additional_attributes"),
+    ]
+    meta = payload.get("meta")
+    if isinstance(meta, dict):
+        chunks.append(meta.get("custom_attributes"))
+        sender = meta.get("sender")
+        if isinstance(sender, dict):
+            chunks.append(sender.get("custom_attributes"))
+            chunks.append(sender.get("additional_attributes"))
+    contact = payload.get("contact")
+    if isinstance(contact, dict):
+        chunks.append(contact.get("custom_attributes"))
+        chunks.append(contact.get("additional_attributes"))
+    conv = payload.get("conversation")
+    if isinstance(conv, dict) and conv is not payload:
+        chunks.append(extract_visitor_persona_hints(conv))
+    return _merge_attr_dicts(*chunks)
+
+
+def extract_inbox_id_from_payload(payload: dict[str, Any] | None) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("inbox_id",):
+        raw = payload.get(key)
+        if raw is not None:
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                pass
+    inbox = payload.get("inbox")
+    if isinstance(inbox, dict) and inbox.get("id") is not None:
+        try:
+            return int(inbox["id"])
+        except (TypeError, ValueError):
+            pass
+    conv = payload.get("conversation")
+    if isinstance(conv, dict):
+        return extract_inbox_id_from_payload(conv)
+    return None
+
+
+def is_web_widget_channel(payload: dict[str, Any] | None) -> bool:
+    """Live chat / website widget — kênh duy nhất hiện picker persona."""
+    if not isinstance(payload, dict):
+        return False
+
+    def _match(raw: Any) -> bool:
+        if not raw:
+            return False
+        s = str(raw).lower().replace(" ", "")
+        return (
+            "webwidget" in s
+            or "web_widget" in s
+            or s in ("website", "channel::webwidget", "channel::website")
+        )
+
+    for key in ("channel", "channel_type"):
+        if _match(payload.get(key)):
+            return True
+    inbox = payload.get("inbox")
+    if isinstance(inbox, dict):
+        if _match(inbox.get("channel_type")) or _match(inbox.get("channel")):
+            return True
+    meta = payload.get("meta")
+    if isinstance(meta, dict) and _match(meta.get("channel")):
+        return True
+    conv = payload.get("conversation")
+    if isinstance(conv, dict) and conv is not payload:
+        return is_web_widget_channel(conv)
+    return False
+
+
+async def set_conversation_kg_persona_attrs(
+    account_id: int,
+    conversation_id: int,
+    *,
+    kg_agent_id: UUID | None = None,
+    tenant_kg_agent_id: UUID | None = None,
+    persona_key: str | None = None,
+    pending: bool | None = None,
+) -> bool:
+    """Ghi sticky persona vào custom_attributes (merge qua POST)."""
+    attrs: dict[str, Any] = {}
+    if kg_agent_id is not None:
+        attrs[KG_ATTR_AGENT_ID] = str(kg_agent_id)
+    if tenant_kg_agent_id is not None:
+        attrs[KG_ATTR_ROW_ID] = str(tenant_kg_agent_id)
+    if persona_key is not None:
+        attrs[KG_ATTR_PERSONA_KEY] = persona_key
+    if pending is not None:
+        attrs[KG_ATTR_PENDING] = bool(pending)
+    if not attrs:
+        return True
+    path = (
+        f"/api/v1/accounts/{account_id}/conversations/"
+        f"{conversation_id}/custom_attributes"
+    )
+    res = await chatwoot_client.application_request(
+        "POST",
+        path,
+        json_body={"custom_attributes": attrs},
+    )
+    if res.status_code not in (200, 201):
+        # Fallback PUT conversation
+        res2 = await chatwoot_client.application_request(
+            "PUT",
+            f"/api/v1/accounts/{account_id}/conversations/{conversation_id}",
+            json_body={"custom_attributes": attrs},
+        )
+        if res2.status_code not in (200, 201):
+            logger.warning(
+                "Set kg persona attrs thất bại conv=%s status=%s/%s",
+                conversation_id,
+                res.status_code,
+                res2.status_code,
+            )
+            return False
+        return True
+    return True
+
+
+async def fetch_conversation_custom_attributes(
+    account_id: int,
+    conversation_id: int,
+) -> dict[str, Any]:
+    """GET conversation để lấy custom_attributes mới nhất (sau khi set pending)."""
+    path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}"
+    res = await chatwoot_client.application_request("GET", path)
+    if res.status_code != 200 or not isinstance(res.data, dict):
+        return {}
+    return extract_conversation_custom_attributes(res.data)
+
+
+async def maybe_handle_persona_selection(
+    db: AsyncSession,
+    *,
+    tenant: Tenant,
+    account_id: int,
+    conversation_id: int,
+    conversation_payload: dict[str, Any],
+    message_content: str,
+    inbox_id: int | None,
+) -> tuple[bool, str]:
+    """
+    Nếu đang chờ chọn persona (live chat ≥2): khớp tin → sticky + ack.
+    Returns (handled, reason). handled=True → webhook không gọi KG với tin chọn.
+    Menu / labels luôn lấy từ tenant_kg_agents (DB), không hardcode.
+    """
+    from app.services.v1.handle_tenant_kg_agent import load_active_kg_personas
+
+    attrs = extract_conversation_custom_attributes(conversation_payload)
+    # Refresh nếu webhook chưa có pending (set ở conversation_created trước đó)
+    if KG_ATTR_PENDING not in attrs and KG_ATTR_AGENT_ID not in attrs:
+        fresh = await fetch_conversation_custom_attributes(
+            account_id, int(conversation_id)
+        )
+        if fresh:
+            attrs = {**attrs, **fresh}
+            conversation_payload["custom_attributes"] = attrs
+
+    pending = attrs.get(KG_ATTR_PENDING) is True or str(
+        attrs.get(KG_ATTR_PENDING)
+    ).lower() in ("true", "1")
+    already = _parse_uuid(attrs.get(KG_ATTR_AGENT_ID))
+    row_sticky = _parse_uuid(attrs.get(KG_ATTR_ROW_ID))
+    if (already is not None or row_sticky is not None) and not pending:
+        return False, "persona_already_set"
+
+    personas = await load_active_kg_personas(db, tenant.id, inbox_id=inbox_id)
+    if len(personas) < 2:
+        return False, "no_picker_needed"
+
+    # Live chat ≥2 chưa sticky: coi như đang chờ chọn (kể cả race pending)
+    web = is_web_widget_channel(conversation_payload)
+    if not pending and already is None and row_sticky is None and web:
+        pending = True
+    if not pending:
+        return False, "not_pending"
+
+    chosen = match_persona_from_message(message_content, personas)
+    if chosen is None:
+        # Đang chờ chọn: không gọi KG. Chỉ nhắc lại menu nếu tin giống lựa chọn sai.
+        text = (message_content or "").strip()
+        looks_like_choice = bool(
+            text
+            and (
+                text.isdigit()
+                or text.lower().startswith(("1.", "2.", "3.", "4.", "5."))
+                or len(text) <= 64
+                and any(
+                    str(getattr(p, "key", "") or "").lower() in text.lower()
+                    or str(getattr(p, "label", "") or "").lower() in text.lower()
+                    for p in personas
+                )
+            )
+        )
+        if looks_like_choice:
+            await send_persona_picker_message(
+                account_id,
+                conversation_id,
+                personas,
+                greeting="Mình chưa nhận ra lựa chọn. Vui lòng chọn lại:",
+            )
+            return True, "persona_invalid_choice"
+        return True, "persona_awaiting_choice"
+
+    ok = await set_conversation_kg_persona_attrs(
+        account_id,
+        conversation_id,
+        kg_agent_id=chosen.kg_agent_id,
+        tenant_kg_agent_id=chosen.id,
+        persona_key=chosen.key,
+        pending=False,
+    )
+    label = chosen.label or chosen.key
+    await send_chatwoot_reply(
+        account_id,
+        conversation_id,
+        f"Đã chọn: {label}. Bạn có thể bắt đầu trò chuyện.",
+    )
+    ca = dict(attrs)
+    ca[KG_ATTR_AGENT_ID] = str(chosen.kg_agent_id)
+    ca[KG_ATTR_ROW_ID] = str(chosen.id)
+    ca[KG_ATTR_PERSONA_KEY] = chosen.key
+    ca[KG_ATTR_PENDING] = False
+    conversation_payload["custom_attributes"] = ca
+    return True, "persona_selected" if ok else "persona_selected_attr_failed"
+
+
+async def after_bot_assigned_setup_persona(
+    db: AsyncSession,
+    *,
+    tenant: Tenant,
+    account_id: int,
+    conversation_id: int,
+    conversation_payload: dict[str, Any],
+) -> str:
+    """
+    Sau khi assign AI Bot — luôn có đường ra an toàn:
+    preselect Redis → row attr → auto default → in-chat picker.
+    Lỗi Redis / Chatwoot message không làm crash webhook.
+    """
+    from app.services.v1.handle_live_chat_public import (
+        PERSONA_ROW_ATTR_KEY,
+        resolve_preselected_persona_from_conversation,
+    )
+    from app.services.v1.handle_tenant_kg_agent import (
+        load_active_kg_personas,
+        resolve_default_kg_agent_row,
+        resolve_kg_agent_id_by_row_id,
+    )
+
+    try:
+        inbox_id = extract_inbox_id_from_payload(conversation_payload)
+        personas = await load_active_kg_personas(db, tenant.id, inbox_id=inbox_id)
+        if not personas:
+            return "no_personas"
+
+        conv_attrs = extract_conversation_custom_attributes(conversation_payload)
+
+        # 1) Redis / client_session preselect
+        try:
+            pre = await resolve_preselected_persona_from_conversation(
+                db,
+                tenant_id=tenant.id,
+                inbox_id=inbox_id,
+                conversation_payload=conversation_payload,
+            )
+        except Exception:
+            logger.exception(
+                "Preselect resolve exception conv=%s — tiếp tục fallback",
+                conversation_id,
+            )
+            pre = None
+
+        if pre:
+            kg_id = _parse_uuid(pre.get("kg_agent_id"))
+            row_id = _parse_uuid(pre.get("tenant_kg_agent_id"))
+            pkey = pre.get("persona_key")
+            if kg_id and row_id:
+                ok = await set_conversation_kg_persona_attrs(
+                    account_id,
+                    conversation_id,
+                    kg_agent_id=kg_id,
+                    tenant_kg_agent_id=row_id,
+                    persona_key=str(pkey) if pkey else None,
+                    pending=False,
+                )
+                if ok:
+                    ca = dict(conv_attrs)
+                    ca[KG_ATTR_AGENT_ID] = str(kg_id)
+                    ca[KG_ATTR_ROW_ID] = str(row_id)
+                    ca[KG_ATTR_PENDING] = False
+                    if pkey:
+                        ca[KG_ATTR_PERSONA_KEY] = str(pkey)
+                    # Optional: copy meta mở rộng (không đè key hệ thống)
+                    meta = pre.get("meta")
+                    if isinstance(meta, dict) and meta:
+                        for mk, mv in meta.items():
+                            sk = str(mk)
+                            if sk.startswith("kg_") or sk in (
+                                KG_ATTR_AGENT_ID,
+                                KG_ATTR_ROW_ID,
+                                KG_ATTR_PENDING,
+                                KG_ATTR_PERSONA_KEY,
+                            ):
+                                continue
+                            ca[f"oh_meta_{sk}"] = mv
+                    conversation_payload["custom_attributes"] = ca
+                    return "persona_preselected_session"
+                logger.warning(
+                    "Sticky preselect thất bại conv=%s — fallback picker/default",
+                    conversation_id,
+                )
+
+        # 2) tenant_kg_agent_id trên attrs (hiếm)
+        hints = extract_visitor_persona_hints(conversation_payload)
+        hints = {**hints, **conv_attrs}
+        row_hint = _parse_uuid(
+            hints.get(PERSONA_ROW_ATTR_KEY) or hints.get(KG_ATTR_ROW_ID)
+        )
+        if row_hint is not None:
+            kg_id = await resolve_kg_agent_id_by_row_id(db, tenant.id, row_hint)
+            chosen = next((p for p in personas if p.id == row_hint), None)
+            if kg_id is not None and chosen is not None:
+                await set_conversation_kg_persona_attrs(
+                    account_id,
+                    conversation_id,
+                    kg_agent_id=kg_id,
+                    tenant_kg_agent_id=chosen.id,
+                    persona_key=chosen.key,
+                    pending=False,
+                )
+                ca = dict(conv_attrs)
+                ca[KG_ATTR_AGENT_ID] = str(kg_id)
+                ca[KG_ATTR_ROW_ID] = str(chosen.id)
+                ca[KG_ATTR_PERSONA_KEY] = chosen.key
+                ca[KG_ATTR_PENDING] = False
+                conversation_payload["custom_attributes"] = ca
+                return "persona_preselected_row"
+
+        # 3) 1 persona hoặc không phải live chat → default
+        if len(personas) == 1 or not is_web_widget_channel(conversation_payload):
+            row = await resolve_default_kg_agent_row(
+                db, tenant.id, inbox_id=inbox_id
+            )
+            if row is None:
+                row = personas[0]
+            await set_conversation_kg_persona_attrs(
+                account_id,
+                conversation_id,
+                kg_agent_id=row.kg_agent_id,
+                tenant_kg_agent_id=row.id,
+                persona_key=row.key,
+                pending=False,
+            )
+            return "persona_auto_default"
+
+        # 4) Fallback cứng: menu trong chat
+        await set_conversation_kg_persona_attrs(
+            account_id,
+            conversation_id,
+            pending=True,
+        )
+        sent = await send_persona_picker_message(
+            account_id, conversation_id, personas
+        )
+        if not sent:
+            logger.warning(
+                "Gửi persona picker thất bại conv=%s — pending=true, "
+                "tin sau vẫn chặn KG đến khi chọn",
+                conversation_id,
+            )
+            return "persona_picker_pending_send_failed"
+        return "persona_picker_sent"
+    except Exception:
+        logger.exception(
+            "after_bot_assigned_setup_persona lỗi conv=%s", conversation_id
+        )
+        return "persona_setup_error"
+
 
 
 async def is_bot_assignee(
@@ -445,7 +935,7 @@ async def is_bot_assignee(
 ) -> bool:
     aid = coerce_assignee_id(assignee_id)
     if aid is None:
-        return False
+            return False
     if isinstance(tenant, UUID):
         t = await db.get(Tenant, tenant)
         if t is None:
@@ -591,7 +1081,9 @@ async def maybe_auto_assign_ai_bot(
     conversation_id: int,
     conversation_payload: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
-    """Conversation mới: chatbot_enabled + default_responder=bot → assign default bot."""
+    """Conversation mới: chatbot_enabled + default_responder=bot + có KG → assign bot."""
+    from app.services.v1.handle_tenant_kg_agent import tenant_has_active_kg_agent
+
     tenant = await db.get(Tenant, tenant_id)
     if not tenant:
         return False, "tenant_missing"
@@ -600,6 +1092,9 @@ async def maybe_auto_assign_ai_bot(
         return False, "chatbot_disabled_tenant"
     if default_responder != "bot":
         return False, "default_responder_agent"
+    if not await tenant_has_active_kg_agent(db, tenant_id):
+        # Không có dịch vụ KG → chat thuần người
+        return False, "no_kg_agent_human_only"
 
     payload = conversation_payload or {}
     assignee_id = extract_assignee_id(payload)
@@ -607,11 +1102,22 @@ async def maybe_auto_assign_ai_bot(
         assignee_id = await fetch_conversation_assignee_id(account_id, conversation_id)
 
     if await is_bot_assignee(db, tenant, assignee_id):
+        # Đã bot — vẫn setup persona nếu chưa sticky
+        attrs = extract_conversation_custom_attributes(payload)
+        if not attrs.get(KG_ATTR_AGENT_ID):
+            detail = await after_bot_assigned_setup_persona(
+                db,
+                tenant=tenant,
+                account_id=account_id,
+                conversation_id=conversation_id,
+                conversation_payload=payload,
+            )
+            return False, f"already_bot:{detail}"
         return False, "already_bot"
     if assignee_id is not None:
         return False, f"already_human:{assignee_id}"
 
-    return await assign_to_ai_bot(
+    ok, detail = await assign_to_ai_bot(
         db,
         tenant,
         account_id,
@@ -619,6 +1125,17 @@ async def maybe_auto_assign_ai_bot(
         sync_flags=True,
         send_note=False,
     )
+    if not ok:
+        return ok, detail
+
+    persona_detail = await after_bot_assigned_setup_persona(
+        db,
+        tenant=tenant,
+        account_id=account_id,
+        conversation_id=conversation_id,
+        conversation_payload=payload,
+    )
+    return True, f"{detail}:{persona_detail}"
 
 
 async def claim_and_reply_omnihub_kg(
@@ -649,6 +1166,33 @@ async def claim_and_reply_omnihub_kg(
         )
         return False, reason
 
+    tenant = await db.get(Tenant, tenant_id)
+    if not tenant:
+        return False, "tenant_missing"
+
+    inbox_id = extract_inbox_id_from_payload(conversation_payload)
+
+    # Live chat: xử lý chọn persona trước khi gọi KG
+    handled, sel_reason = await maybe_handle_persona_selection(
+        db,
+        tenant=tenant,
+        account_id=account_id,
+        conversation_id=int(conversation_id),
+        conversation_payload=conversation_payload,
+        message_content=message_content,
+        inbox_id=inbox_id,
+    )
+    if handled:
+        logger.info(
+            "Bot persona selection conv=%s msg=%s reason=%s",
+            conversation_id,
+            message_id,
+            sel_reason,
+        )
+        # Claim để webhook retry không gửi lại menu / ack
+        await _claim_incoming_message_for_reply(account_id, message_id)
+        return False, sel_reason
+
     claimed, claim_reason = await _claim_incoming_message_for_reply(
         account_id, message_id
     )
@@ -661,16 +1205,19 @@ async def claim_and_reply_omnihub_kg(
         )
         return False, claim_reason
 
-    tenant = await db.get(Tenant, tenant_id)
     assignee_id = extract_assignee_id(conversation_payload)
     if assignee_id is None:
         assignee_id = await fetch_conversation_assignee_id(
             account_id, int(conversation_id)
         )
-    kg_agent_id = await resolve_kg_agent_id_for_assignee(
-        db, tenant, coerce_assignee_id(assignee_id)
+    kg_agent_id = await resolve_kg_agent_for_reply(
+        db,
+        tenant,
+        conversation_payload=conversation_payload,
+        assignee_chatwoot_id=coerce_assignee_id(assignee_id),
+        inbox_id=inbox_id,
     )
-    if not tenant or not kg_agent_id:
+    if not kg_agent_id:
         await _release_incoming_message_claim(account_id, message_id)
         return False, "tenant_kg_agent_missing"
 
@@ -774,7 +1321,7 @@ async def call_kg_chatbot_core(
                                     )
                         except Exception:
                             pass
-
+                
                 if full_response:
                     return full_response.strip()
     except Exception as e:
@@ -790,13 +1337,20 @@ async def send_chatwoot_reply(
     account_id: int,
     conversation_id: int,
     reply_text: str,
+    *,
+    content_type: str | None = None,
+    content_attributes: dict[str, Any] | None = None,
 ) -> bool:
-    """Gửi tin outgoing (bot) lên messaging."""
+    """Gửi tin outgoing (bot) lên messaging. Hỗ trợ input_select cho live chat."""
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages"
-    payload = {
+    payload: dict[str, Any] = {
         "content": reply_text,
         "message_type": "outgoing",
     }
+    if content_type:
+        payload["content_type"] = content_type
+    if content_attributes:
+        payload["content_attributes"] = content_attributes
     res = await chatwoot_client.application_request("POST", path, json_body=payload)
     if res.status_code not in (200, 201):
         logger.error(
@@ -806,6 +1360,134 @@ async def send_chatwoot_reply(
         )
         return False
     return True
+
+
+async def send_persona_picker_message(
+    account_id: int,
+    conversation_id: int,
+    personas: list[Any],
+    *,
+    greeting: str | None = None,
+) -> bool:
+    """
+    Menu chọn persona — labels lấy từ DB (không hardcode).
+    Ưu tiên Chatwoot input_select (bấm được trên widget); fallback text có số.
+    """
+    if not personas:
+        return False
+    greeting_text = (greeting or "").strip() or (
+        "Xin chào! Vui lòng chọn một lựa chọn bên dưới để bắt đầu."
+    )
+    items = []
+    for p in personas:
+        title = str(getattr(p, "label", None) or getattr(p, "key", None) or "Lựa chọn")
+        # value = opaque row id — webhook khớp chắc, không lộ kg_agent_id
+        value = str(getattr(p, "id", "") or getattr(p, "key", "") or title)
+        items.append({"title": title, "value": value})
+
+    ok = await send_chatwoot_reply(
+        account_id,
+        conversation_id,
+        greeting_text,
+        content_type="input_select",
+        content_attributes={"items": items},
+    )
+    if ok:
+        return True
+    # Fallback: một số inbox/agent không nhận input_select
+    return await send_chatwoot_reply(
+        account_id,
+        conversation_id,
+        build_persona_picker_message(personas, greeting=greeting_text),
+    )
+
+
+def extract_persona_choice_text(message_payload: dict[str, Any] | None) -> str:
+    """
+    Lấy text dùng để khớp persona từ webhook message_created.
+    Chatwoot input_select: content_attributes.submitted_values[].value ưu tiên hơn content.
+    """
+    if not isinstance(message_payload, dict):
+        return ""
+    attrs = message_payload.get("content_attributes")
+    if isinstance(attrs, dict):
+        submitted = attrs.get("submitted_values")
+        if isinstance(submitted, list):
+            for item in submitted:
+                if isinstance(item, dict):
+                    val = item.get("value")
+                    if val is not None and str(val).strip():
+                        return str(val).strip()
+                    title = item.get("title")
+                    if title is not None and str(title).strip():
+                        return str(title).strip()
+                elif item is not None and str(item).strip():
+                    return str(item).strip()
+        # một số bản Chatwoot chỉ có selected_values / values
+        for key in ("selected_values", "values"):
+            raw = attrs.get(key)
+            if isinstance(raw, list) and raw:
+                first = raw[0]
+                if isinstance(first, dict):
+                    v = first.get("value") or first.get("title")
+                    if v is not None and str(v).strip():
+                        return str(v).strip()
+                elif first is not None and str(first).strip():
+                    return str(first).strip()
+    return (message_payload.get("content") or "").strip()
+
+
+def build_persona_picker_message(
+    personas: list[Any],
+    *,
+    greeting: str | None = None,
+) -> str:
+    head = (greeting or "").strip() or (
+        "Xin chào! Vui lòng chọn một lựa chọn bên dưới để bắt đầu:"
+    )
+    lines = [head, ""]
+    for i, p in enumerate(personas, start=1):
+        label = (
+            getattr(p, "label", None) or getattr(p, "key", None) or f"Lựa chọn {i}"
+        )
+        lines.append(f"{i}. {label}")
+    lines.append("")
+    lines.append("Trả lời bằng số thứ tự hoặc bấm lựa chọn.")
+    return "\n".join(lines)
+
+
+def match_persona_from_message(
+    message: str,
+    personas: list[Any],
+) -> Any | None:
+    """Khớp tin khách / input_select value với persona: id, số, key, label."""
+    text = (message or "").strip()
+    if not text or not personas:
+        return None
+    # Chatwoot input_select thường gửi value = row id
+    for p in personas:
+        pid = str(getattr(p, "id", "") or "").strip().lower()
+        if pid and text.lower() == pid:
+            return p
+    if text.isdigit():
+        idx = int(text)
+        if 1 <= idx <= len(personas):
+            return personas[idx - 1]
+    lower = text.lower()
+    for p in personas:
+        key = str(getattr(p, "key", "") or "").strip().lower()
+        label = str(getattr(p, "label", "") or "").strip().lower()
+        if key and lower == key:
+            return p
+        if label and lower == label:
+            return p
+    for i, p in enumerate(personas, start=1):
+        label = str(getattr(p, "label", "") or "").strip()
+        if label and label.lower() in lower:
+            return p
+        if lower.startswith(f"{i}.") or lower.startswith(f"{i})"):
+            return p
+    return None
 
 
 _BOT_LABELS = frozenset({"bot-active", "bot-disabled"})

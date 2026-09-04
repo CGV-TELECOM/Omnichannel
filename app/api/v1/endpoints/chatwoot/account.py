@@ -99,6 +99,21 @@ async def bulk_action_labels(
     )
 
 
+@router.get("/accounts/{tenant_id}/inbox_members/{inbox_id}")
+async def list_inbox_members(
+    request: Request,
+    tenant_id: UUID,
+    inbox_id: int,
+    _=Depends(has_permission("view_messaging_inboxes")),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """Chatwoot: GET /api/v1/accounts/{account_id}/inbox_members/{inbox_id}"""
+    return await handle_chatwoot.list_inbox_members(
+        request, current_user, tenant_id, inbox_id, db
+    )
+
+
 @router.post("/accounts/{tenant_id}/inbox_members")
 @log_user_action("chatwootActionAgentInboxes")
 async def action_agent_inboxes(
@@ -125,6 +140,22 @@ async def patch_agent_inboxes(
     current_user: User = Depends(get_current_user_dependency),
 ):
     return await handle_chatwoot.patch_new_agent_inboxes(
+        request, current_user, tenant_id, body, db
+    )
+
+
+@router.delete("/accounts/{tenant_id}/inbox_members")
+@log_user_action("chatwootRemoveAgentInboxes")
+async def remove_agent_inboxes(
+    request: Request,
+    tenant_id: UUID,
+    body: ChatwootActionAgentInboxesBody,
+    _=Depends(has_permission("manage_messaging_inbox_members")),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """Chatwoot: DELETE /api/v1/accounts/{account_id}/inbox_members"""
+    return await handle_chatwoot.remove_inbox_members(
         request, current_user, tenant_id, body, db
     )
 

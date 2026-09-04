@@ -560,14 +560,66 @@ async def assign_conversation_to_ai_bot(
 # --- Inbox / team / conversation / message forward (Application API) ---
 
 
+async def sync_inbox_bindings(
+    current_user: User,
+    tenant_id: UUID,
+    db: AsyncSession,
+):
+    """Admin: GET inboxes Chatwoot → upsert messaging_inbox_bindings."""
+    from app.services.v1.handle_chatwoot._shared import (
+        _require_tenant_access,
+        _resolve_account_id,
+    )
+    from app.services.v1.handle_messaging_inbox_binding import sync_tenant_inbox_bindings
+
+    denied = await _require_tenant_access(current_user, tenant_id, db)
+    if denied is not None:
+        return denied
+    account_id, _ = await _resolve_account_id(db, tenant_id)
+    if account_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.NOT_FOUND,
+            "Chưa có map messaging account cho tenant này",
+        )
+    try:
+        n = await sync_tenant_inbox_bindings(
+            db,
+            tenant_id=tenant_id,
+            messaging_account_id=int(account_id),
+        )
+        return api_response(
+            ResponseStatus.SUCCESS,
+            ResponseStatusCode.OK,
+            "Đồng bộ inbox bindings thành công",
+            {
+                "tenant_id": str(tenant_id),
+                "messaging_account_id": int(account_id),
+                "upserted": n,
+            },
+        )
+    except Exception as e:
+        logger.exception("sync_inbox_bindings: %s", e)
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            f"Lỗi đồng bộ inbox bindings: {e}",
+        )
+
+
 async def list_inboxes(
     request: Request,
     current_user: User,
     tenant_id: UUID,
     db: AsyncSession,
 ):
-    """GET /api/v1/accounts/{account_id}/inboxes — listAllInboxes."""
-    return await _tenant_application_forward(
+    """GET /api/v1/accounts/{account_id}/inboxes — listAllInboxes + sync website_token bindings."""
+    from app.services.v1.handle_chatwoot._shared import _resolve_account_id
+    from app.services.v1.handle_messaging_inbox_binding import (
+        upsert_inbox_bindings_from_payload,
+    )
+
+    result = await _tenant_application_forward(
         current_user,
         tenant_id,
         db,
@@ -579,6 +631,25 @@ async def list_inboxes(
         ok_message="Danh sách inbox messaging",
         error_message="Không lấy được danh sách inbox từ messaging",
     )
+    # Sync bindings best-effort (không fail list nếu sync lỗi)
+    try:
+        if isinstance(result, dict) and result.get("status") == "success":
+            data = result.get("data") or {}
+            messaging = data.get("messaging") if isinstance(data, dict) else None
+            account_id, _ = await _resolve_account_id(db, tenant_id)
+            if account_id is not None and messaging is not None:
+                n = await upsert_inbox_bindings_from_payload(
+                    db,
+                    tenant_id=tenant_id,
+                    messaging_account_id=int(account_id),
+                    inboxes_payload=messaging,
+                )
+                await db.commit()
+                if isinstance(data, dict):
+                    data["inbox_bindings_synced"] = n
+    except Exception:
+        logger.exception("Sync inbox bindings sau list_inboxes thất bại tenant=%s", tenant_id)
+    return result
 
 
 async def create_inbox(

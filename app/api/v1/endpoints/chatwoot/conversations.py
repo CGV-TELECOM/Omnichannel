@@ -33,6 +33,20 @@ async def list_tenant_inboxes(
     return await handle_chatwoot.list_inboxes(request, current_user, tenant_id, db)
 
 
+@router.post("/tenants/{tenant_id}/inboxes/sync-bindings")
+@log_user_action("syncMessagingInboxBindings")
+async def sync_tenant_inbox_bindings(
+    tenant_id: UUID,
+    _=Depends(has_permission("view_messaging_inboxes")),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """Đồng bộ website_token → tenant/inbox (phục vụ public live-chat personas)."""
+    return await handle_chatwoot.sync_inbox_bindings(
+        current_user, tenant_id, db
+    )
+
+
 @router.post("/tenants/{tenant_id}/inboxes")
 @log_user_action("chatwootCreateInbox")
 async def create_tenant_inbox(

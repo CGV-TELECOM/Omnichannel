@@ -41,6 +41,7 @@ from app.api.v1.endpoints.conversation_rating import (
     public_router as router_ratings_public,
     router as router_conversation_ratings,
 )
+from app.api.v1.endpoints.live_chat_public import router as router_live_chat_public
 # WebSocket & Notifications
 from app.core.socket.manager import socket_manager
 from app.api.v1.endpoints.notification import router as router_notification
@@ -60,6 +61,7 @@ app.include_router(router_auth, prefix="/api/v1", tags=["Auth"])
 app.include_router(router_chatwoot_webhook, prefix="/api/v1")
 app.include_router(router_telephony_webhook, prefix="/api/v1")
 app.include_router(router_ratings_public, prefix="/api/v1")
+app.include_router(router_live_chat_public, prefix="/api/v1")
 protected_routers = [
     router_user,
     router_role_permission,
@@ -90,10 +92,6 @@ protected_routers = [
 ]
 
 origins = [
-    "http://localhost:5173",
-    "http://52.221.226.79:5173",
-    "http://localhost:3000",
-    "https://devomnichannelcgv.telesip.vn",
     "*"
 ]
 

@@ -13,7 +13,9 @@ from app.services.v1.handle_chatwoot.account import (
     update_custom_filter,
     delete_custom_filter,
     add_new_agent_inboxes,
-    patch_new_agent_inboxes
+    list_inbox_members,
+    patch_new_agent_inboxes,
+    remove_inbox_members,
 )
 from app.services.v1.handle_chatwoot.agent_bots import (
     create_account_agent_bot,
@@ -52,6 +54,7 @@ from app.services.v1.handle_chatwoot.conversations import (
     list_conversation_messages,
     list_conversations,
     list_inboxes,
+    sync_inbox_bindings,
     set_conversation_labels,
     toggle_conversation_status,
     toggle_conversation_typing,
@@ -120,7 +123,10 @@ __all__ = [
     "list_conversation_messages",
     "list_conversations",
     "list_inboxes",
+    "sync_inbox_bindings",
     "add_new_agent_inboxes",
+    "list_inbox_members",
+    "remove_inbox_members",
     "list_labels",
     "list_teams",
     "create_team",

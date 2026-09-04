@@ -239,6 +239,8 @@ class TenantKgAgent(Base):
     )
     kg_agent_id = Column(UUID(as_uuid=True), nullable=False)
     graph_id = Column(UUID(as_uuid=True), nullable=True)
+    # null = áp dụng mọi inbox; set khi persona chỉ cho 1 live-chat inbox
+    inbox_id = Column(Integer, nullable=True)
     key = Column(String(64), nullable=False, default="default")
     label = Column(String(128), nullable=True)
     is_default = Column(Boolean, nullable=False, default=False, server_default=text("false"))
@@ -256,6 +258,49 @@ class TenantKgAgent(Base):
     )
 
     tenant = relationship("Tenant", back_populates="kg_agents")
+
+
+class MessagingInboxBinding(Base):
+    """
+    Map website_token (live chat embed) → tenant/inbox.
+    Public personas API + mở rộng multi-inbox không cần JWT.
+    """
+
+    __tablename__ = "messaging_inbox_bindings"
+    __table_args__ = (
+        UniqueConstraint("website_token", name="uq_messaging_inbox_bindings_website_token"),
+        Index("ix_messaging_inbox_bindings_tenant_id", "tenant_id"),
+        Index(
+            "uq_messaging_inbox_bindings_tenant_inbox",
+            "tenant_id",
+            "inbox_id",
+            unique=True,
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
+    tenant_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("tenant.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    messaging_account_id = Column(Integer, nullable=False)
+    inbox_id = Column(Integer, nullable=False)
+    website_token = Column(String(128), nullable=False)
+    inbox_name = Column(String(255), nullable=True)
+    channel_type = Column(String(64), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 # manhnx - 18-06-2026: lưu lại thông tin được cung cấp từ KH

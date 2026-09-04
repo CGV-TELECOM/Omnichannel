@@ -103,6 +103,14 @@ class Settings:
     # Knowledge Graph (KG) Chatbot settings
     KG_CORE_URL: str = os.getenv("KG_CORE_URL", "https://techstorehust.site/api/v1/chat/completions/stream")
     KG_CORE_API_KEY: str | None = os.getenv("KG_CORE_API_KEY")
+    # Live-chat overlay: TTL Redis chờ mở widget sau POST select (giây). Mặc định 1h.
+    LIVE_CHAT_PERSONA_SELECT_TTL_SECONDS: int = int(
+        os.getenv("LIVE_CHAT_PERSONA_SELECT_TTL_SECONDS", "3600")
+    )
+    # Prefix setUser identifier (tránh đụng email/user thật).
+    LIVE_CHAT_CLIENT_SESSION_PREFIX: str = os.getenv(
+        "LIVE_CHAT_CLIENT_SESSION_PREFIX", "oh_"
+    )
 
 
 settings = Settings()
