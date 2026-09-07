@@ -355,6 +355,12 @@ async def increment_token_version(user_id: UUID, db: AsyncSession):
 
 # Lấy thông tin người dùng từ token, dùng để check permission
 async def get_current_user(request: Request, db: AsyncSession = Depends(get_db)) -> User:
+    # 1. Ưu tiên lấy từ request.state nếu verify_token hoặc dependency khác đã giải quyết
+    state = getattr(request, "state", None)
+    if state is not None and getattr(state, "current_user", None) is not None:
+        return state.current_user
+
+    # 2. Fallback: Nếu chưa có trong state, giải mã token và truy vấn DB đầy đủ
     token = request.headers.get("Authorization")
     if not token or not token.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token không hợp lệ")
@@ -377,6 +383,11 @@ async def get_current_user(request: Request, db: AsyncSession = Depends(get_db))
         if token_version is None or token_version != user_token_version:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token đã bị vô hiệu hóa")
         
+        # Cache vào state cho các bước tiếp theo trong cùng request
+        if state is not None:
+            state.current_user = user
+            state.user_id = user.id
+
         return user
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token không hợp lệ")

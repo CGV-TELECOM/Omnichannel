@@ -59,6 +59,13 @@ class Settings:
     REDIS_URL: str = _normalize_redis_url(os.getenv("REDIS_URL"))
     # Timezone Configuration - Default: Asia/Ho_Chi_Minh (UTC+7)
     TIMEZONE: str = os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh")
+    # CORS
+    CORS_ORIGINS: list[str] = [
+        o.strip()
+        for o in os.getenv("CORS_ORIGINS", "").split(",")
+        if o.strip()
+    ]
+    CORS_ORIGIN_REGEX: str | None = os.getenv("CORS_ORIGIN_REGEX", r"^https?://.*")
     # JWT
     ALGORITHM: str = os.getenv("ALGORITHM")
     SECRET_KEY: str = os.getenv("SECRET_KEY")

@@ -229,6 +229,7 @@ class TenantKgAgent(Base):
         UniqueConstraint("tenant_id", "key", name="uq_tenant_kg_agents_tenant_key"),
         Index("ix_tenant_kg_agents_tenant_id", "tenant_id"),
         Index("ix_tenant_kg_agents_kg_agent_id", "kg_agent_id"),
+        Index("ix_tenant_kg_agents_tenant_inbox", "tenant_id", "inbox_id"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=generate_uuid7, index=True)
@@ -270,11 +271,10 @@ class MessagingInboxBinding(Base):
     __table_args__ = (
         UniqueConstraint("website_token", name="uq_messaging_inbox_bindings_website_token"),
         Index("ix_messaging_inbox_bindings_tenant_id", "tenant_id"),
-        Index(
-            "uq_messaging_inbox_bindings_tenant_inbox",
+        UniqueConstraint(
             "tenant_id",
             "inbox_id",
-            unique=True,
+            name="uq_messaging_inbox_bindings_tenant_inbox",
         ),
     )
 

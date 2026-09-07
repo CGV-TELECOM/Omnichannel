@@ -13,6 +13,7 @@ from app.api.v1.endpoints.role_permission import router as router_role_permissio
 from app.schemas.responses.api_response_rule import api_response, convert_uuid_to_str
 from app.schemas.responses.api_response_rule import ResponseStatus, ResponseStatusCode
 from app.core.config.database import async_session_maker
+from app.core.config.app_config import settings
 from app.seeds.rbac import seed_rbac
 from app.api.v1.endpoints.permissions import router as router_permissions
 from app.api.v1.endpoints.role import router as router_role
@@ -91,16 +92,27 @@ protected_routers = [
     router_conversation_ratings,
 ]
 
-origins = [
-    "*"
+default_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8080",
+    "https://devomnichannelcgv.telesip.vn",
+    "https://devomi.telesip.vn",
+    "https://devchat.telesip.vn",
 ]
+
+cors_origins = sorted(list(set(default_origins + settings.CORS_ORIGINS)))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=cors_origins,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept"],
+    allow_headers=["*"],
 )
 
 

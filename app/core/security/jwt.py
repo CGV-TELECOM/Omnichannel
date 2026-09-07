@@ -151,10 +151,17 @@ async def verify_token(
     Returns:
         UUID: user_id
     """
+    state = getattr(request, "state", None)
+    if state is not None and getattr(state, "current_user", None) is not None:
+        return state.current_user.id
+
     payload = _parse_bearer_access_payload(request)
     raw_id = payload.get("user_id")
     user_id = UUID(raw_id) if isinstance(raw_id, str) else raw_id
-    await _assert_token_version_valid(db, user_id, payload.get("token_version"))
+    user = await _assert_token_version_valid(db, user_id, payload.get("token_version"))
+    if state is not None:
+        state.current_user = user
+        state.user_id = user.id
     return user_id
 
 def verify_refresh_token(request: Request) -> UUID:
