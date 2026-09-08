@@ -120,13 +120,6 @@ for router in protected_routers:
     app.include_router(router, prefix="/api/v1", dependencies=[Depends(verify_token)])
 
 
-# Custom response handler to ensure UUID serialization
-@app.middleware("http")
-async def uuid_serialization_middleware(request, call_next):
-    response = await call_next(request)
-    # If response body contains UUID, it will be handled by api_response function
-    return response
-
 
 @app.get("/")
 def read_root():

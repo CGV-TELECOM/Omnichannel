@@ -77,11 +77,11 @@ python-multipart==0.0.9                # Form data & file uploads
 # python-dateutil==2.8.2               # Advanced date parsing
 
 # ---------------------------------------------------
-# Testing (Development) - Uncomment when needed
+# Testing (Development)
 # ---------------------------------------------------
-# pytest==7.4.4                        # Testing framework (compatible with pytest-asyncio)
-# pytest-asyncio==0.23.6               # Async test support
-# pytest-cov==4.1.0                    # Coverage reports
+pytest==7.4.4                          # Testing framework (compatible with pytest-asyncio)
+pytest-asyncio==0.23.6                 # Async test support
+pytest-cov==4.1.0                      # Coverage reports
 # Note: httpx already included above for production use
 
 # ---------------------------------------------------

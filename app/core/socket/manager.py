@@ -258,16 +258,20 @@ class SocketManager:
                     'message': 'Failed to subscribe to channels'
                 }, room=sid)
     
-    async def send_to_user(self, user_id: UUID, event: str, data: dict):
+    async def send_to_user(self, user_id: UUID, event: str, data: dict) -> bool:
         """
-        Send message to specific user (all their sessions)
+        Send message to specific user (all their sessions).
+        Returns True if the user has active sessions and message was emitted, False otherwise.
         """
         try:
             room = f"user:{user_id}"
             await self.sio.emit(event, data, room=room)
-            logger.info(f"Sent '{event}' to user {user_id}")
+            is_online = self.is_user_online(user_id)
+            logger.info(f"Sent '{event}' to user {user_id} (online={is_online})")
+            return is_online
         except Exception as e:
             logger.error(f"Error sending to user {user_id}: {str(e)}")
+            return False
     
     async def send_to_tenant(self, tenant_id: UUID, event: str, data: dict):
         """

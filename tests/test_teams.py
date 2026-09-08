@@ -98,12 +98,17 @@ async def test_list_teams_success(mock_req, mock_resolve, mock_access):
 
     # Mock ensure mapping helper returns mapping rows
     with patch(
-        "app.services.v1.handle_chatwoot.teams._ensure_tenant_team_map",
-        side_effect=lambda db, t_id, cw_id: ChatwootLegacyMap(
-            resource_type=ChatwootMapResourceType.TEAM,
-            local_uuid=uuid4(),
-            chatwoot_id=cw_id,
-            tenant_id=t_id,
+        "app.services.v1.handle_chatwoot.teams._ensure_tenant_team_maps_bulk",
+        new=AsyncMock(
+            side_effect=lambda db, t_id, cw_ids: {
+                cw_id: ChatwootLegacyMap(
+                    resource_type=ChatwootMapResourceType.TEAM,
+                    local_uuid=uuid4(),
+                    chatwoot_id=cw_id,
+                    tenant_id=t_id,
+                )
+                for cw_id in cw_ids
+            }
         ),
     ):
         response = await list_teams(request, current_user, tenant_id, db)

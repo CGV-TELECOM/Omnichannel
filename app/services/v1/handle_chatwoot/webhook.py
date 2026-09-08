@@ -126,12 +126,28 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                     ok,
                     detail,
                 )
+                # Thông báo phân công nếu hội thoại tạo mới đã gán sẵn Agent người
+                initial_aid = extract_assignee_id(conv)
+                if initial_aid and not await is_bot_assignee(db, tenant_id, initial_aid):
+                    from app.services.v1.handle_chatwoot.notifications import (
+                        notify_chatwoot_conversation_assignment,
+                    )
+                    await notify_chatwoot_conversation_assignment(
+                        db=db,
+                        tenant_id=tenant_id,
+                        conversation_payload=conv if isinstance(conv, dict) else {},
+                        assignee_id=initial_aid,
+                        cw_map=cw_map,
+                    )
 
-        # 4b. Tin khách → Reply Gate OmniHub KG
+        # 4b. Tin khách → Reply Gate OmniHub KG & Persistent Notification
         elif event_type == "message_created" and is_incoming_customer_message(payload):
             from app.services.v1.handle_chatwoot.chatbot import (
                 extract_persona_choice_text,
                 fetch_conversation_assignee_id,
+            )
+            from app.services.v1.handle_chatwoot.notifications import (
+                notify_chatwoot_incoming_message,
             )
 
             conversation_payload = payload.get("conversation") or {}
@@ -184,7 +200,15 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                         message_id=message_id,
                     )
 
-        # 4c. Assignee đổi → sync bot flags (backup nếu assign ngoài OmniHub)
+            # Lưu DB và gửi thông báo cá nhân tới Agent phụ trách (có fallback đa tầng)
+            await notify_chatwoot_incoming_message(
+                db=db,
+                tenant_id=tenant_id,
+                payload=payload,
+                cw_map=cw_map,
+            )
+
+        # 4c. Assignee đổi → sync bot flags & thông báo phân công Agent
         elif event_type == "conversation_updated":
             conversation_payload = payload
             if "conversation" in payload and isinstance(payload["conversation"], dict):
@@ -241,6 +265,17 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                             aid,
                             send_note=True,
                         )
+                    # Thông báo cho Agent người khi được gán hội thoại
+                    from app.services.v1.handle_chatwoot.notifications import (
+                        notify_chatwoot_conversation_assignment,
+                    )
+                    await notify_chatwoot_conversation_assignment(
+                        db=db,
+                        tenant_id=tenant_id,
+                        conversation_payload=conversation_payload,
+                        assignee_id=aid,
+                        cw_map=cw_map,
+                    )
 
         # CSAT: chỉ khi status chuyển → resolved
         if event_type in ("conversation_status_changed", "conversation_updated"):
