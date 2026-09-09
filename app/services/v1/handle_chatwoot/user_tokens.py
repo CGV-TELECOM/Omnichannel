@@ -353,8 +353,13 @@ def missing_token_api_response():
 async def user_is_elevated_messaging_admin(
     db: AsyncSession, current_user: User
 ) -> bool:
-    """Platform admin / admin-partner / level cao nhất trong tenant."""
-    from app.utils.helpers import is_platform_admin, isCheckMaxLevelTenant
+    """
+    Platform admin / admin-partner → dùng token admin env (full account tenant).
+
+    Không dùng level cao nhất tenant: agent thường vẫn có thể là max level
+    trong tenant nhỏ → nếu escalate sẽ thấy all hội thoại (lệch Chatwoot UI).
+    """
+    from app.utils.helpers import is_platform_admin
 
     if await is_platform_admin(current_user, db):
         return True
@@ -365,13 +370,7 @@ async def user_is_elevated_messaging_admin(
         return True
     if "admin-partner" in role_name.replace("_", "-"):
         return True
-    try:
-        return bool(
-            current_user.level is not None
-            and await isCheckMaxLevelTenant(current_user, db)
-        )
-    except Exception:
-        return False
+    return False
 
 
 def parse_inbox_ids_from_messaging_payload(payload: Any) -> set[int]:
