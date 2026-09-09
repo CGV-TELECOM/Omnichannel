@@ -88,6 +88,34 @@ def missing_token_api_response():
     )
 
 
+async def resolve_agent_scoped_access_token(
+    db: AsyncSession,
+    current_user: User,
+) -> tuple[str | None, Any]:
+    """
+    Token gọi Application API theo quyền agent (inbox membership).
+
+    - Agent thường: token cá nhân (Chatwoot enforce inbox ACL).
+    - Platform admin: CHATWOOT_USER_API_TOKEN (xem full account để ops).
+
+    Trả (token, None) hoặc (None, api_error_response).
+    """
+    from app.core.config.app_config import settings
+    from app.utils.helpers import is_platform_admin
+
+    if await is_platform_admin(current_user, db):
+        tok = (settings.CHATWOOT_USER_API_TOKEN or "").strip()
+        if not tok:
+            return None, missing_token_api_response()
+        return tok, None
+
+    tok = await ensure_user_chatwoot_api_token(db, current_user)
+    if not tok:
+        return None, missing_token_api_response()
+    return tok, None
+
+
+
 async def resolve_chatwoot_user_id(db: AsyncSession, user: User) -> int | None:
     stmt = select(ChatwootLegacyMap).where(
         and_(

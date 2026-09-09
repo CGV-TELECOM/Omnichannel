@@ -43,6 +43,7 @@ from app.services.v1.handle_chatwoot._shared import (
 from app.services.v1.handle_chatwoot.user_tokens import (
     ensure_user_chatwoot_api_token,
     missing_token_api_response,
+    resolve_agent_scoped_access_token,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,10 +101,15 @@ async def list_conversations(
             else:
                 pairs.append((k, v))
 
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/conversations",
             params=pairs or None,
+            access_token=user_token,
         )
         cw_map = await _chatwoot_agent_id_to_local_map(db, tenant_id)
         if res.status_code == 200:
@@ -160,11 +166,16 @@ async def filter_conversations(
                 "Chưa có map messaging account cho tenant này",
             )
 
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         res = await chatwoot_client.application_request(
             "POST",
             f"/api/v1/accounts/{account_id}/conversations/filter",
             params=_forward_all_query_pairs(request) or None,
             json_body=body.model_dump(exclude_none=True),
+            access_token=user_token,
         )
 
         cw_map = await _chatwoot_agent_id_to_local_map(db, tenant_id)
@@ -224,10 +235,14 @@ async def get_conversation(
                 "Chưa có map messaging account cho tenant này",
             )
         pairs = _forward_all_query_pairs(request)
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
         res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/conversations/{conversation_id}",
             params=pairs or None,
+            access_token=user_token,
         )
         cw_map = await _chatwoot_agent_id_to_local_map(db, tenant_id)
         if res.status_code == 200:
@@ -284,6 +299,7 @@ async def delete_conversation(
             "conversation_id": conversation_id,
         },
         error_message="Xóa conversation trên messaging thất bại",
+        agent_scoped=True,
     )
 
 
@@ -311,10 +327,14 @@ async def list_conversation_messages(
                 "Chưa có map messaging account cho tenant này",
             )
         pairs = _forward_all_query_pairs(request)
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
         res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages",
             params=pairs or None,
+            access_token=user_token,
         )
         cw_map = await _chatwoot_agent_id_to_local_map(db, tenant_id)
         if res.status_code == 200:
@@ -640,6 +660,7 @@ async def list_inboxes(
         redact_agents=False,
         ok_message="Danh sách inbox messaging",
         error_message="Không lấy được danh sách inbox từ messaging",
+        agent_scoped=True,
     )
     # Sync bindings best-effort (không fail list nếu sync lỗi)
     try:
@@ -685,6 +706,7 @@ async def create_inbox(
         success_codes=frozenset({200, 201}),
         error_message="Tạo inbox trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 
@@ -707,6 +729,7 @@ async def get_inbox(
         redact_agents=False,
         ok_message="Chi tiết inbox messaging",
         error_message="Không lấy được inbox từ messaging",
+        agent_scoped=True,
     )
 
 
@@ -733,6 +756,7 @@ async def update_inbox(
         ok_message="Đã cập nhật inbox trên messaging",
         error_message="Cập nhật inbox trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 
@@ -759,6 +783,7 @@ async def create_conversation(
         success_codes=frozenset({200, 201}),
         error_message="Tạo conversation trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 
@@ -786,6 +811,7 @@ async def update_conversation(
         extra_response={"conversation_id": conversation_id},
         error_message="Cập nhật conversation trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 
@@ -818,6 +844,7 @@ async def create_conversation_message(
         error_message="Gửi message lên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
         access_token=user_token,
+        agent_scoped=True,
     )
 
 
@@ -848,6 +875,7 @@ async def delete_conversation_message(
             "message_id": message_id,
         },
         error_message="Xóa message trên messaging thất bại",
+        agent_scoped=True,
     )
 
 
@@ -875,6 +903,7 @@ async def toggle_conversation_status(
         extra_response={"conversation_id": conversation_id},
         error_message="Đổi trạng thái conversation thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
     # MVP CSAT: sau khi resolve thành công → tạo + gửi link (idempotent với webhook)
     if (
@@ -920,6 +949,7 @@ async def get_conversation_labels(
         ok_message="Danh sách label của conversation",
         extra_response={"conversation_id": conversation_id},
         error_message="Không lấy được label conversation từ messaging",
+        agent_scoped=True,
     )
 
 
@@ -939,6 +969,7 @@ async def list_labels(
         path_suffix="/labels",
         forward_all_query_params=True,
         redact_agents=False,
+        agent_scoped=True,
         ok_message="Danh sách labels của account messaging",
         extra_response={"tenant_id": str(tenant_id)},
         error_message="Không lấy được danh sách labels từ messaging",
@@ -968,6 +999,7 @@ async def create_label(
         extra_response={"tenant_id": str(tenant_id)},
         error_message="Tạo label trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 
@@ -992,6 +1024,7 @@ async def delete_label(
         ok_message="Đã xóa label trên messaging",
         extra_response={"tenant_id": str(tenant_id), "label": label},
         error_message="Xóa label trên messaging thất bại",
+        agent_scoped=True,
     )
 
 
@@ -1019,6 +1052,7 @@ async def set_conversation_labels(
         extra_response={"conversation_id": conversation_id},
         error_message="Cập nhật label conversation thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 
@@ -1046,6 +1080,7 @@ async def toggle_conversation_typing(
         extra_response={"conversation_id": conversation_id},
         error_message="Gửi typing status thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 
@@ -1073,6 +1108,7 @@ async def update_conversation_custom_attributes(
         extra_response={"conversation_id": conversation_id},
         error_message="Cập nhật custom_attributes conversation thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 async def get_attachment(
@@ -1094,6 +1130,7 @@ async def get_attachment(
         redact_agents=False,
         ok_message="Chi tiết attachment messaging",
         error_message="Không lấy được attachment từ messaging",
+        agent_scoped=True,
     )
 
 async def update_last_seen(
@@ -1116,4 +1153,5 @@ async def update_last_seen(
         ok_message="Đã cập nhật last_seen conversation trên messaging",
         extra_response={"conversation_id": conversation_id},
         error_message="Cập nhật last_seen conversation thất bại",
+        agent_scoped=True,
     )

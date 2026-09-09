@@ -33,6 +33,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _map_tenant_team_by_local,
     _translate_local_agent_uuids_to_remote,
 )
+from app.services.v1.handle_chatwoot.user_tokens import resolve_agent_scoped_access_token
 
 
 logger = logging.getLogger(__name__)
@@ -83,11 +84,16 @@ async def list_teams(
                 "Chưa có map messaging account cho tenant này",
             )
 
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/teams",
             params=pairs or None,
+            access_token=user_token,
         )
         data = res.data
         if res.status_code == 200:
@@ -156,12 +162,17 @@ async def create_team(
             )
 
         payload = body.model_dump(exclude_none=True)
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
             "POST",
             f"/api/v1/accounts/{account_id}/teams",
             json_body=payload,
             params=pairs or None,
+            access_token=user_token,
         )
         data = res.data
         if res.status_code in (200, 201) and isinstance(data, dict) and data.get("id") is not None:
@@ -235,11 +246,16 @@ async def get_team(
                 "Không có map Team cho UUID này",
             )
 
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/teams/{m.chatwoot_id}",
             params=pairs or None,
+            access_token=user_token,
         )
         data = res.data
         if res.status_code == 200 and isinstance(data, dict):
@@ -309,12 +325,17 @@ async def update_team(
                 "Cần ít nhất một trường để cập nhật",
             )
 
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
             "PATCH",
             f"/api/v1/accounts/{account_id}/teams/{m.chatwoot_id}",
             json_body=payload,
             params=pairs or None,
+            access_token=user_token,
         )
         data = res.data
         if res.status_code == 200 and isinstance(data, dict):
@@ -375,11 +396,16 @@ async def delete_team(
                 "Không có map Team cho UUID này",
             )
 
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
             "DELETE",
             f"/api/v1/accounts/{account_id}/teams/{m.chatwoot_id}",
             params=pairs or None,
+            access_token=user_token,
         )
         if res.status_code in (200, 204):
             await db.delete(m)
@@ -438,11 +464,16 @@ async def list_team_members(
                 "Không có map Team cho UUID này",
             )
 
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/teams/{m.chatwoot_id}/team_members",
             params=pairs or None,
+            access_token=user_token,
         )
         data = res.data
         if res.status_code == 200:
@@ -535,12 +566,17 @@ async def _modify_team_members(
             )
 
         payload = {"user_ids": cw_agent_ids}
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
             method,
             f"/api/v1/accounts/{account_id}/teams/{m.chatwoot_id}/team_members",
             json_body=payload,
             params=pairs or None,
+            access_token=user_token,
         )
         data = res.data
         if res.status_code == 200:

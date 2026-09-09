@@ -28,6 +28,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _map_tenant_agent_by_local,
     _resolve_account_id,
 )
+from app.services.v1.handle_chatwoot.user_tokens import resolve_agent_scoped_access_token
 
 
 async def list_agents(
@@ -52,11 +53,16 @@ async def list_agents(
                 "Chưa có map messaging account cho tenant này",
             )
 
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/agents",
             params=pairs or None,
+            access_token=user_token,
         )
         data = res.data
         if res.status_code == 200:
@@ -223,6 +229,10 @@ async def update_agent(
                 "Không có map agent cho UUID này (gọi GET agents để tạo map hoặc tạo agent mới)",
             )
 
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         payload = _application_agent_payload(body)
 
         pairs = _forward_all_query_pairs(request)
@@ -231,6 +241,7 @@ async def update_agent(
             f"/api/v1/accounts/{account_id}/agents/{m.chatwoot_id}",
             json_body=payload,
             params=pairs or None,
+            access_token=user_token,
         )
         data = res.data
         if res.status_code == 200 and isinstance(data, dict):

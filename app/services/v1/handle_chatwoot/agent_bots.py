@@ -506,6 +506,7 @@ async def list_account_agent_bots(
         redact_agents=False,
         ok_message="Danh sách Account AgentBots",
         error_message="Không lấy được danh sách Account AgentBots từ messaging",
+        agent_scoped=True,
     )
 
 
@@ -532,6 +533,7 @@ async def create_account_agent_bot(
         success_codes=frozenset({200, 201}),
         error_message="Tạo Account AgentBot thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 
@@ -555,6 +557,7 @@ async def get_account_agent_bot(
         ok_message="Chi tiết Account AgentBot",
         extra_response={"agent_bot_id": agent_bot_id},
         error_message="Không lấy được Account AgentBot từ messaging",
+        agent_scoped=True,
     )
 
 
@@ -582,6 +585,7 @@ async def update_account_agent_bot(
         extra_response={"agent_bot_id": agent_bot_id},
         error_message="Cập nhật Account AgentBot thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        agent_scoped=True,
     )
 
 
@@ -606,5 +610,6 @@ async def delete_account_agent_bot(
         success_codes=frozenset({200, 204}),
         extra_response={"agent_bot_id": agent_bot_id},
         error_message="Xóa Account AgentBot thất bại",
+        agent_scoped=True,
     )
 

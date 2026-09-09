@@ -701,6 +701,7 @@ async def list_inbox_members(
         extra_response={"inbox_id": int(inbox_id)},
         ok_message="Danh sách agent trong inbox",
         error_message="Không lấy được danh sách agent trong inbox từ messaging",
+        agent_scoped=True,
     )
 
 

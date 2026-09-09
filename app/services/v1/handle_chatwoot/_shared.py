@@ -97,10 +97,12 @@ async def _tenant_application_forward(
     error_message: str = "Messaging trả lỗi",
     error_payload_keys: list[str] | None = None,
     access_token: str | None = None,
+    agent_scoped: bool = False,
 ) -> Any:
     """Forward Application API theo account đã map; bọc `messaging` + optional redact agent id.
 
-    access_token: nếu truyền → sender = chủ token (không dùng CHATWOOT_USER_API_TOKEN).
+    access_token: nếu truyền → dùng token đó.
+    agent_scoped: True → resolve token agent (inbox ACL); platform admin dùng token admin env.
     """
     try:
         if params is None and request is not None:
@@ -111,6 +113,19 @@ async def _tenant_application_forward(
         denied = await _require_tenant_access(current_user, tenant_id, db)
         if denied is not None:
             return denied
+
+        effective_token = access_token
+        if agent_scoped and not effective_token:
+            from app.services.v1.handle_chatwoot.user_tokens import (
+                resolve_agent_scoped_access_token,
+            )
+
+            effective_token, tok_err = await resolve_agent_scoped_access_token(
+                db, current_user
+            )
+            if tok_err is not None:
+                return tok_err
+
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(
@@ -124,7 +139,7 @@ async def _tenant_application_forward(
             path,
             json_body=json_body,
             params=params,
-            access_token=access_token,
+            access_token=effective_token,
         )
         if res.status_code in success_codes:
             data: Any = res.data

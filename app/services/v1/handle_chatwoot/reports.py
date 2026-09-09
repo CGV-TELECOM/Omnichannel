@@ -107,11 +107,20 @@ async def _forward_report(
     """
     Forward request báo cáo tới Chatwoot theo account đã map với tenant.
     path_builder(account_id) → path đầy đủ (v1 hoặc v2).
+    Dùng token agent để Chatwoot enforce quyền báo cáo / phạm vi inbox.
     """
     try:
         denied = await _require_tenant_access(current_user, tenant_id, db)
         if denied is not None:
             return denied
+
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            resolve_agent_scoped_access_token,
+        )
+
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
@@ -122,7 +131,9 @@ async def _forward_report(
             )
 
         path = path_builder(account_id)
-        res = await chatwoot_client.application_request("GET", path, params=params)
+        res = await chatwoot_client.application_request(
+            "GET", path, params=params, access_token=user_token
+        )
 
         if res.status_code == 200:
             data: Any = res.data
@@ -538,6 +549,14 @@ async def get_dashboard_overview(
         if denied is not None:
             return denied
 
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            resolve_agent_scoped_access_token,
+        )
+
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
+
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(
@@ -556,16 +575,19 @@ async def get_dashboard_overview(
             "GET",
             f"/api/v2/accounts/{account_id}/reports/summary",
             params=[("type", "account"), *period],
+            access_token=user_token,
         )
         live_res = await chatwoot_client.application_request(
             "GET",
             f"/api/v2/accounts/{account_id}/reports/conversations",
             params=[("type", "account")],
+            access_token=user_token,
         )
         csat_res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/csat_survey_responses/metrics",
             params=period or None,
+            access_token=user_token,
         )
 
         def block(res) -> dict[str, Any]:

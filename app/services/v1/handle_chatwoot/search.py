@@ -42,6 +42,7 @@ async def _forward_search(
         redact_agents=True,
         ok_message=ok_message,
         error_message=error_message,
+        agent_scoped=True,
     )
 
 
