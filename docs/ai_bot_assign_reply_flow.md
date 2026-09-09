@@ -39,6 +39,22 @@ Mỗi tenant gắn **UUID agent nội bộ** qua list `messaging_bots` (có th�
 4. `CHATWOOT_USER_API_TOKEN` (admin tích hợp — tránh dùng cho tin khách)
 
 GET `/tenants/me/settings` trả `has_api_access_token` (không lộ raw). PATCH: omit/null = giữ token cũ theo `agent_uuid`; `""` = xóa; chuỗi = ghi mới.
+
+### Agent người (inbox reply / assign)
+
+Mỗi agent **lưu token 1 lần** vào `users.meta_data.chatwoot_api_access_token` (Platform GET). Lần sau dùng lại — không fallback admin BerlinHoang.
+
+| Khi | Hành vi |
+|-----|---------|
+| Gửi tin / assign | `ensure` (đã có → dùng; thiếu → Platform GET + lưu) |
+| Tạo / sync user | capture token nếu chưa có |
+| Admin 1 lần / tenant | `POST /api/v1/user/sync-chatwoot-api-tokens` |
+| Self | `POST /api/v1/user/me/ensure-chatwoot-api-token` |
+
+GET user: `meta_data.has_chatwoot_api_access_token` (không lộ raw).
+
+| Key | Nơi | Ý nghĩa |
+|-----|-----|---------|
 | `chatbot_enabled` | `tenant.meta_data` | Kill-switch toàn tenant |
 | `default_responder` | `bot` \| `agent` | Auto-assign bot khi conversation mới (chỉ khi có bot `is_default`) |
 

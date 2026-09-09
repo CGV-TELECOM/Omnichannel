@@ -40,6 +40,10 @@ from app.services.v1.handle_chatwoot._shared import (
     _tenant_application_forward,
     _walk_redact_agent_refs,
 )
+from app.services.v1.handle_chatwoot.user_tokens import (
+    ensure_user_chatwoot_api_token,
+    missing_token_api_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -390,10 +394,15 @@ async def assign_conversation(
             if body.assignee_agent_uuid is None:
                 payload["team_id"] = tm.chatwoot_id
 
+        user_token = await ensure_user_chatwoot_api_token(db, current_user)
+        if not user_token:
+            return missing_token_api_response()
+
         res = await chatwoot_client.application_request(
             "POST",
             f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments",
             json_body=payload,
+            access_token=user_token,
         )
         cw_map = await _chatwoot_agent_id_to_local_map(db, tenant_id)
         if res.status_code == 200 and isinstance(res.data, dict):
@@ -414,6 +423,7 @@ async def assign_conversation(
                     int(conversation_id),
                     coerce_assignee_id(assigned_id),
                     send_note=True,
+                    access_token=user_token,
                 )
             except Exception as sync_err:
                 logger.warning(
@@ -787,7 +797,10 @@ async def create_conversation_message(
     body: ChatwootApplicationJsonBody,
     db: AsyncSession,
 ):
-    """POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/messages — create message."""
+    """POST messages — dùng token current_user (lưu 1 lần từ Platform)."""
+    user_token = await ensure_user_chatwoot_api_token(db, current_user)
+    if not user_token:
+        return missing_token_api_response()
     payload = body.model_dump(mode="json", exclude_none=True)
     return await _tenant_application_forward(
         current_user,
@@ -804,6 +817,7 @@ async def create_conversation_message(
         extra_response={"conversation_id": conversation_id},
         error_message="Gửi message lên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
+        access_token=user_token,
     )
 
 

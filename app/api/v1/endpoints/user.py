@@ -126,6 +126,39 @@ async def sync_user_to_chatwoot_agent(
     return await handle_user.sync_user_to_chatwoot_agent(user_id, db, current_user)
 
 
+@router.post("/me/ensure-chatwoot-api-token")
+@log_user_action("ensure_chatwoot_api_token")
+async def ensure_my_chatwoot_api_token(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(has_permission("current_user")),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """Lấy + lưu Chatwoot Access Token 1 lần (Platform API)."""
+    return await handle_user.ensure_my_chatwoot_api_token(db, current_user)
+
+
+@router.post("/sync-chatwoot-api-tokens")
+@log_user_action("sync_chatwoot_api_tokens")
+async def sync_tenant_chatwoot_api_tokens(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(has_permission("edit_users")),
+    current_user: User = Depends(get_current_user_dependency),
+    tenant_id: Optional[UUID] = Query(
+        None, description="Tenant backfill (mặc định = tenant của bạn)"
+    ),
+    force_refresh: bool = Query(False, description="True = lấy lại kể cả đã có"),
+):
+    """Backfill token cả tenant — mỗi agent lưu 1 lần."""
+    return await handle_user.sync_tenant_chatwoot_api_tokens(
+        db,
+        current_user,
+        tenant_id=tenant_id,
+        force_refresh=force_refresh,
+    )
+
+
 # @router.get("/{user_id}/groups")
 # async def get_user_groups(
 #     user_id: int,

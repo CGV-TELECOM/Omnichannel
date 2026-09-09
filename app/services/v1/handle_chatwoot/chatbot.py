@@ -1228,6 +1228,7 @@ async def sync_bot_flags_for_assignee(
     assignee_id: int | None,
     *,
     send_note: bool = True,
+    access_token: str | None = None,
 ) -> str:
     """Đồng bộ label/attr theo assignee (bot ids của tenant)."""
     if await is_bot_assignee(db, tenant, assignee_id):
@@ -1237,6 +1238,7 @@ async def sync_bot_flags_for_assignee(
                 account_id,
                 conversation_id,
                 note_text="AI Bot đang phụ trách. Bot đã được bật lại.",
+                access_token=access_token,
             )
         return "bot_active"
 
@@ -1246,6 +1248,7 @@ async def sync_bot_flags_for_assignee(
             account_id,
             conversation_id,
             note_text="Nhân viên hỗ trợ đã tiếp nhận. Bot tự động tạm dừng.",
+            access_token=access_token,
         )
     return "bot_disabled"
 
@@ -1801,6 +1804,8 @@ async def send_internal_note(
     account_id: int,
     conversation_id: int,
     note_text: str,
+    *,
+    access_token: str | None = None,
 ):
     """Internal note (private) trên messaging."""
     path = f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages"
@@ -1809,4 +1814,6 @@ async def send_internal_note(
         "message_type": "outgoing",
         "private": True,
     }
-    await chatwoot_client.application_request("POST", path, json_body=payload)
+    await chatwoot_client.application_request(
+        "POST", path, json_body=payload, access_token=access_token
+    )

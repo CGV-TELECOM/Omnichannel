@@ -96,8 +96,12 @@ async def _tenant_application_forward(
     extra_response: dict[str, Any] | None = None,
     error_message: str = "Messaging trả lỗi",
     error_payload_keys: list[str] | None = None,
+    access_token: str | None = None,
 ) -> Any:
-    """Forward Application API theo account đã map; bọc `messaging` + optional redact agent id."""
+    """Forward Application API theo account đã map; bọc `messaging` + optional redact agent id.
+
+    access_token: nếu truyền → sender = chủ token (không dùng CHATWOOT_USER_API_TOKEN).
+    """
     try:
         if params is None and request is not None:
             if forward_all_query_params:
@@ -116,7 +120,11 @@ async def _tenant_application_forward(
             )
         path = _application_account_path(account_id, path_suffix)
         res = await chatwoot_client.application_request(
-            method, path, json_body=json_body, params=params
+            method,
+            path,
+            json_body=json_body,
+            params=params,
+            access_token=access_token,
         )
         if res.status_code in success_codes:
             data: Any = res.data

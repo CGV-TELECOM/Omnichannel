@@ -128,14 +128,19 @@ def _webphone_response_dict(user: User) -> dict[str, Any]:
 
 # Keys nội bộ sync messaging — không trả cho FE
 _META_DATA_HIDDEN_KEYS = frozenset({"chatwoot_agent"})
+_META_CHATWOOT_TOKEN_KEYS = frozenset(
+    {"chatwoot_api_access_token", "has_chatwoot_api_access_token"}
+)
 
 
 def _public_meta_data(meta: Any) -> dict[str, Any] | None:
-    """Loại bỏ keys nội bộ (chatwoot sync) khỏi meta_data trả về."""
+    """Loại bỏ keys nội bộ (chatwoot sync + raw API token) khỏi meta_data trả về."""
     if not isinstance(meta, dict):
         return None
     filtered = {k: v for k, v in meta.items() if k not in _META_DATA_HIDDEN_KEYS}
-    return filtered or None
+    from app.services.v1.handle_chatwoot.user_tokens import redact_chatwoot_token_from_meta
+
+    return redact_chatwoot_token_from_meta(filtered)
 
 
 def _serialize_user(
@@ -279,7 +284,7 @@ def _merge_chatwoot_agent_payload(
                     flat_nested[k] = v
         root_flat: dict[str, Any] = {}
         for k, v in meta_data.items():
-            if k == "chatwoot_agent":
+            if k == "chatwoot_agent" or k in _META_CHATWOOT_TOKEN_KEYS:
                 continue
             if v is not None:
                 root_flat[k] = v
@@ -287,6 +292,8 @@ def _merge_chatwoot_agent_payload(
     merged = {**core, **extras}
     out = {k: v for k, v in merged.items() if v is not None}
     out.pop("chatwoot_agent", None)
+    for k in _META_CHATWOOT_TOKEN_KEYS:
+        out.pop(k, None)
     return out
 
 
@@ -298,7 +305,7 @@ def _meta_data_triggers_chatwoot_agent_sync(meta: Any) -> bool:
     if isinstance(nested, dict) and len(nested) > 0:
         return True
     for k, v in meta.items():
-        if k == "chatwoot_agent":
+        if k == "chatwoot_agent" or k in _META_CHATWOOT_TOKEN_KEYS:
             continue
         if v is not None:
             return True
@@ -1002,6 +1009,9 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
         new_user.meta_data["chatwoot_agent"] = {
             k: v for k, v in chatwoot_payload.items() if k != "password"
         }
+        from app.services.v1.handle_chatwoot.user_tokens import capture_token_into_user_meta
+
+        await capture_token_into_user_meta(new_user, chatwoot_created_id)
 
         try:
             await db.commit()
@@ -1437,6 +1447,8 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     )
         
         for key, value in update_data.items():
+            if key == "meta_data" and isinstance(value, dict):
+                value = _prospective_user_meta_for_sync(user, {"meta_data": value}) or value
             setattr(user, key, value)
 
         if chatwoot_merged is not None:
@@ -1445,6 +1457,13 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                 k: v for k, v in chatwoot_merged.items() if k != "password"
             }
             user.meta_data = md_u
+            from app.services.v1.handle_chatwoot.user_tokens import (
+                capture_token_into_user_meta,
+                user_has_chatwoot_api_token,
+            )
+
+            if user.chat_id is not None and not user_has_chatwoot_api_token(user):
+                await capture_token_into_user_meta(user, int(user.chat_id))
 
         # Đổi password hoặc disable user → vô hiệu hóa JWT hiện tại
         if password_changed or requested_deactivate:
@@ -1767,6 +1786,12 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
         user.meta_data["chatwoot_agent"] = {
             k: v for k, v in create_payload.items() if k != "password"
         }
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            capture_token_into_user_meta,
+            user_has_chatwoot_api_token,
+        )
+
+        token_ok = await capture_token_into_user_meta(user, agent_id)
         try:
             await db.commit()
         except SQLAlchemyError:
@@ -1790,8 +1815,10 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
             data={
                 "user_id": user.id,
                 "tenant_id": user.tenant_id,
-                "meta_data": user.meta_data,
+                "meta_data": _public_meta_data(user.meta_data),
                 "messaging_synced": True,
+                "has_chatwoot_api_access_token": token_ok
+                or user_has_chatwoot_api_token(user),
             },
         )
     except SQLAlchemyError as e:
@@ -1807,6 +1834,96 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
             status=ResponseStatus.ERROR,
             status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
             message="Lỗi không xác định",
+        )
+
+
+async def ensure_my_chatwoot_api_token(db: AsyncSession, current_user: User):
+    """Platform GET → lưu token 1 lần cho current_user."""
+    from app.services.v1.handle_chatwoot.user_tokens import (
+        ensure_user_chatwoot_api_token,
+        user_has_chatwoot_api_token,
+    )
+
+    try:
+        tok = await ensure_user_chatwoot_api_token(db, current_user)
+        return api_response(
+            status=ResponseStatus.SUCCESS if tok else ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.OK if tok else ResponseStatusCode.FORBIDDEN,
+            message=(
+                "Đã có / đã lấy Chatwoot API token"
+                if tok
+                else "Không lấy được token từ Platform (chưa map hoặc chưa permissible)"
+            ),
+            data={
+                "user_id": str(current_user.id),
+                "has_chatwoot_api_access_token": bool(tok)
+                or user_has_chatwoot_api_token(current_user),
+            },
+        )
+    except Exception as e:
+        return api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            message=f"Lỗi không xác định: {e}",
+        )
+
+
+async def sync_tenant_chatwoot_api_tokens(
+    db: AsyncSession,
+    current_user: User,
+    *,
+    tenant_id: UUID | None = None,
+    force_refresh: bool = False,
+):
+    """Backfill token cả tenant (mỗi user lưu 1 lần)."""
+    from app.services.v1.handle_chatwoot.user_tokens import (
+        bulk_backfill_tenant_chatwoot_api_tokens,
+    )
+
+    try:
+        is_super = await is_platform_admin(current_user, db)
+        target = tenant_id or current_user.tenant_id
+        if target is None:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.BAD_REQUEST,
+                message="Thiếu tenant_id",
+            )
+        if not is_super and current_user.tenant_id != target:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Bạn chỉ có thể backfill token trong tenant của mình",
+            )
+
+        result = await bulk_backfill_tenant_chatwoot_api_tokens(
+            db,
+            target,
+            only_missing=not force_refresh,
+            force_refresh=force_refresh,
+        )
+        return api_response(
+            status=ResponseStatus.SUCCESS,
+            status_code=ResponseStatusCode.OK,
+            message=(
+                f"Đã lưu token: {result.get('captured', 0)} user "
+                f"(đã có={result.get('skipped_has_token', 0)}, "
+                f"chưa map={result.get('skipped_no_map', 0)}, "
+                f"lỗi={result.get('failed_count', 0)})"
+            ),
+            data=result,
+        )
+    except SQLAlchemyError:
+        return api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            message="Lỗi khi truy vấn cơ sở dữ liệu",
+        )
+    except Exception as e:
+        return api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            message=f"Lỗi không xác định: {e}",
         )
 
 # async def get_user_groups(user_id, page, page_size, search, sort_by, sort_order, db, current_user):
