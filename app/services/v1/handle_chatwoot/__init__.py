@@ -85,6 +85,16 @@ from app.services.v1.handle_chatwoot.users import (
 from app.services.v1.handle_chatwoot.webhook import (
     handle_webhook,
 )
+from app.services.v1.handle_chatwoot.search import (
+    search_all,
+    search_contacts,
+    search_conversations,
+    search_messages,
+    search_articles,
+    contacts_search,
+    conversations_search,
+    companies_search,
+)
 
 __all__ = [
     "handle_webhook",
@@ -157,5 +167,13 @@ __all__ = [
     "get_custom_filters",
     "update_custom_filter",
     "delete_custom_filter",
-    "update_last_seen"
+    "update_last_seen",
+    "search_all",
+    "search_contacts",
+    "search_conversations",
+    "search_messages",
+    "search_articles",
+    "contacts_search",
+    "conversations_search",
+    "companies_search",
 ]
