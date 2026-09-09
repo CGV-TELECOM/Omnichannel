@@ -70,7 +70,7 @@ async def provision_account(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Tenant đã được liên kết với messaging account (bỏ qua tạo mới)",
+                "Doanh nghiệp đã được liên kết kênh trò chuyện.",
                 {"tenant_id": str(body.tenant_id), "messaging_linked": True},
             )
 
@@ -122,7 +122,7 @@ async def provision_account(
                     str(delete_ex),
                 )
             await db.rollback()
-            msg = "Gắn user tích hợp vào messaging account thất bại, đã rollback tạo doanh nghiệp"
+            msg = "Không liên kết được kênh trò chuyện, đã hủy tạo doanh nghiệp."
             if link_info.get("skipped_reason"):
                 msg += f". Lý do: {link_info.get('skipped_reason')}"
             return api_response(
@@ -196,11 +196,7 @@ async def provision_account(
         }
         if sanitize_meta:
             success_data["payload_sanitize_meta"] = sanitize_meta
-        msg = (
-            "Đã tạo messaging account và lưu map tenant. "
-            "Đã gắn user tích hợp (Application API) vào account với role "
-            f"{_INTEGRATION_ACCOUNT_USER_ROLE}."
-        )
+        msg = "Đã liên kết kênh trò chuyện cho doanh nghiệp."
         return api_response(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,
@@ -242,7 +238,7 @@ async def get_account(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -256,7 +252,7 @@ async def get_account(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Lấy thông tin messaging account thành công",
+                "Lấy thông tin kênh trò chuyện thành công.",
                 {"tenant_id": str(tenant_id), "messaging_account": data},
             )
         return api_response(
@@ -299,7 +295,7 @@ async def sync_integration_account_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         link_info = await link_integration_user_to_chatwoot_account(account_id)
@@ -372,7 +368,7 @@ async def update_account(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -403,7 +399,7 @@ async def update_account(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Cập nhật messaging account thành công",
+                "Cập nhật kênh trò chuyện thành công.",
                 ok_data,
             )
         err_detail = _chatwoot_error_payload(
@@ -414,7 +410,7 @@ async def update_account(
         return api_response(
             ResponseStatus.ERROR,
             res.status_code if res.status_code in (401, 404, 503) else 502,
-            "Cập nhật messaging account thất bại",
+            "Cập nhật kênh trò chuyện thất bại.",
             err_detail,
         )
     except SQLAlchemyError as e:
@@ -449,7 +445,7 @@ async def delete_account(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         account_id = mapping.chatwoot_id
@@ -473,7 +469,7 @@ async def delete_account(
         return api_response(
             ResponseStatus.SUCCESS,
             ResponseStatusCode.OK,
-            "Đã xóa messaging account và bản ghi map",
+            "Đã hủy liên kết kênh trò chuyện.",
             {"tenant_id": str(tenant_id), "removed_messaging_account_id": account_id},
         )
     except SQLAlchemyError as e:
@@ -538,7 +534,7 @@ async def _build_bulk_action_payload(
                 return None, api_response(
                     ResponseStatus.ERROR,
                     ResponseStatusCode.BAD_REQUEST,
-                    "assignee_id / assignee_agent_uuid không hợp lệ",
+                    "Nhân viên được chọn không hợp lệ.",
                 )
             m = await _map_tenant_agent_by_local(db, tenant_id, assignee_uuid)
             if not m:
@@ -550,7 +546,7 @@ async def _build_bulk_action_payload(
                     return None, api_response(
                         ResponseStatus.ERROR,
                         ResponseStatusCode.NOT_FOUND,
-                        f"Không tìm thấy map agent cho UUID: {assignee_uuid}",
+                        "Không tìm thấy nhân viên tương ứng.",
                     )
                 fields["assignee_id"] = remote_ids[0]
             else:
@@ -567,14 +563,14 @@ async def _build_bulk_action_payload(
                 return None, api_response(
                     ResponseStatus.ERROR,
                     ResponseStatusCode.BAD_REQUEST,
-                    "team_id không hợp lệ",
+                    "Nhóm được chọn không hợp lệ.",
                 )
             tm = await _map_tenant_team_by_local(db, tenant_id, team_uuid)
             if not tm:
                 return None, api_response(
                     ResponseStatus.ERROR,
                     ResponseStatusCode.NOT_FOUND,
-                    f"Không tìm thấy map team cho UUID: {team_uuid}",
+                    "Không tìm thấy nhóm tương ứng.",
                 )
             fields["team_id"] = int(tm.chatwoot_id)
 
@@ -626,12 +622,32 @@ async def bulk_action_account(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         payload, err = await _build_bulk_action_payload(body, db, tenant_id)
         if err is not None:
             return err
+
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        if fields and ("assignee_id" in fields or "team_id" in fields):
+            from app.services.v1.handle_chatwoot.user_tokens import (
+                deny_unless_can_assign_assignee,
+            )
+
+            raw_assignee = fields.get("assignee_id")
+            try:
+                target_cw = int(raw_assignee) if raw_assignee is not None else None
+            except (TypeError, ValueError):
+                target_cw = None
+            assign_denied = await deny_unless_can_assign_assignee(
+                db,
+                current_user,
+                target_chatwoot_user_id=target_cw,
+                assigning_team="team_id" in fields and "assignee_id" not in fields,
+            )
+            if assign_denied is not None:
+                return assign_denied
 
         pairs = _forward_all_query_pairs(request)
 
@@ -729,7 +745,7 @@ async def remove_inbox_members(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         remote_user_ids, missing_uuids = await _translate_local_agent_uuids_to_remote(
@@ -739,7 +755,7 @@ async def remove_inbox_members(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                f"Không tìm thấy map agent cho các UUID sau: {', '.join(missing_uuids)}",
+                "Không tìm thấy một hoặc nhiều nhân viên đã chọn.",
             )
 
         payload = {
@@ -816,7 +832,7 @@ async def add_new_agent_inboxes(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         remote_user_ids, missing_uuids = await _translate_local_agent_uuids_to_remote(
@@ -826,7 +842,7 @@ async def add_new_agent_inboxes(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                f"Không tìm thấy map agent cho các UUID sau: {', '.join(missing_uuids)}",
+                "Không tìm thấy một hoặc nhiều nhân viên đã chọn.",
             )
 
         payload = {
@@ -908,7 +924,7 @@ async def patch_new_agent_inboxes(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         remote_user_ids, missing_uuids = await _translate_local_agent_uuids_to_remote(
@@ -918,7 +934,7 @@ async def patch_new_agent_inboxes(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                f"Không tìm thấy map agent cho các UUID sau: {', '.join(missing_uuids)}",
+                "Không tìm thấy một hoặc nhiều nhân viên đã chọn.",
             )
 
         payload = {
@@ -991,7 +1007,7 @@ async def get_custom_filters(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         pairs = _forward_all_query_pairs(request)
@@ -1080,7 +1096,7 @@ async def custom_filters(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         payload = body.model_dump(exclude_none=True)
@@ -1153,7 +1169,7 @@ async def update_custom_filter(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         payload = body.model_dump(exclude_none=True)
@@ -1228,7 +1244,7 @@ async def delete_custom_filter(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         pairs = _forward_all_query_pairs(request)

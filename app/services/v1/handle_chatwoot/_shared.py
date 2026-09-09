@@ -63,7 +63,7 @@ async def _require_tenant_access(
     return api_response(
         ResponseStatus.ERROR,
         ResponseStatusCode.FORBIDDEN,
-        "Bạn không có quyền truy cập tenant này",
+        "Bạn không có quyền truy cập doanh nghiệp này",
     )
 
 
@@ -131,7 +131,7 @@ async def _tenant_application_forward(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         path = _application_account_path(account_id, path_suffix)
         res = await chatwoot_client.application_request(

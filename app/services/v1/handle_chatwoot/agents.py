@@ -51,7 +51,7 @@ async def list_agents(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
@@ -142,7 +142,7 @@ async def create_agent(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         payload = _application_agent_payload(body)
@@ -216,7 +216,7 @@ async def update_agent(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         m = await _map_tenant_agent_by_local(db, tenant_id, agent_id)
@@ -224,7 +224,7 @@ async def update_agent(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map agent cho UUID này (gọi GET agents để tạo map hoặc tạo agent mới)",
+                "Không tìm thấy nhân viên tương ứng.",
             )
 
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
@@ -289,7 +289,7 @@ async def delete_agent(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         m = await _map_tenant_agent_by_local(db, tenant_id, agent_id)
@@ -297,7 +297,7 @@ async def delete_agent(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map agent cho UUID này",
+                "Không tìm thấy nhân viên tương ứng.",
             )
 
         pairs = _forward_all_query_pairs(request)

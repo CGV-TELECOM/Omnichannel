@@ -696,26 +696,11 @@ async def _csat_inbox_acl_filters(
 
     from app.services.v1.handle_chatwoot.user_tokens import (
         resolve_agent_scoped_access_token,
+        user_is_elevated_messaging_admin,
+        parse_inbox_ids_from_messaging_payload,
     )
-    from app.utils.helpers import isCheckMaxLevelTenant
 
-    elevated = await is_platform_admin(current_user, db)
-    if not elevated:
-        role_name = ""
-        if getattr(current_user, "role", None) is not None:
-            role_name = (current_user.role.name or "").strip().lower()
-        if role_name in {"admin-partner", "admin_partner", "admin partner"}:
-            elevated = True
-        elif "admin-partner" in role_name.replace("_", "-"):
-            elevated = True
-    if not elevated:
-        try:
-            elevated = bool(
-                current_user.level is not None
-                and await isCheckMaxLevelTenant(current_user, db)
-            )
-        except Exception:
-            elevated = False
+    elevated = await user_is_elevated_messaging_admin(db, current_user)
 
     if elevated:
         if requested_inbox_id is not None:
@@ -731,7 +716,7 @@ async def _csat_inbox_acl_filters(
         return None, api_response(
             ResponseStatus.ERROR,
             ResponseStatusCode.NOT_FOUND,
-            "Chưa có map messaging account cho tenant này",
+            "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
         )
 
     res = await chatwoot_client.application_request(
@@ -740,7 +725,7 @@ async def _csat_inbox_acl_filters(
         access_token=token,
     )
     allowed = (
-        _parse_inbox_ids_from_messaging_payload(res.data)
+        parse_inbox_ids_from_messaging_payload(res.data)
         if res.status_code == 200
         else set()
     )
@@ -1352,7 +1337,7 @@ async def _require_conversation_assignee(
         return api_response(
             ResponseStatus.ERROR,
             ResponseStatusCode.FORBIDDEN,
-            "Conversation chưa được gán nhân viên — chỉ người được gán mới gửi được link đánh giá",
+            "Hội thoại chưa được gán nhân viên — chỉ người được gán mới gửi được link đánh giá",
         )
 
     my_agent_id = await _current_user_messaging_agent_id(db, current_user)
@@ -1360,7 +1345,7 @@ async def _require_conversation_assignee(
         return api_response(
             ResponseStatus.ERROR,
             ResponseStatusCode.FORBIDDEN,
-            "Tài khoản chưa đồng bộ agent messaging — không thể gửi link đánh giá",
+            "Tài khoản chưa sẵn sàng gửi đánh giá. Vui lòng liên hệ quản trị viên.",
         )
 
     if int(my_agent_id) != int(assignee_chatwoot_id):
@@ -1401,7 +1386,7 @@ async def send_rating_manually(
         return api_response(
             ResponseStatus.ERROR,
             ResponseStatusCode.NOT_FOUND,
-            "Không tìm thấy messaging account cho tenant",
+            "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
         )
 
     meta = await fetch_conversation_channel_meta(int(account_id), conversation_id)

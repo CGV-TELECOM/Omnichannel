@@ -214,6 +214,10 @@ class ChatwootConversationAssignBody(BaseModel):
 
     - Gửi **assignee_agent_uuid** để gán agent (UUID nội bộ đã map với messaging agent id).
     - Hoặc gửi **team_id** (UUID team nội bộ đã map với messaging team id). Nếu có cả hai, messaging ưu tiên assignee.
+
+    RBAC:
+    - ``assign_messaging_conversation``: được gọi API; không có reassign → chỉ self-assign.
+    - ``reassign_messaging_conversation``: gán người khác / team theo logic Chatwoot.
     """
 
     model_config = ConfigDict(extra="forbid")

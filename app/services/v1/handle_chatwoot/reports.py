@@ -9,28 +9,31 @@ Endpoint gốc phía Chatwoot:
 - GET /api/v2/accounts/{id}/reports/conversation_traffic      — traffic theo giờ/ngày
 - GET /api/v2/accounts/{id}/summary_reports/{agent|team|label|channel} — Chatwoot >= 4.10
 - GET /api/v1/accounts/{id}/csat_survey_responses(/metrics)   — CSAT
+
+Phạm vi:
+- admin-partner / platform / level cao nhất tenant: full account tenant
+- agent thường: chỉ metric cá nhân (type=agent) + inbox mình là member
 """
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import Request
+from sqlalchemy import and_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import User
+from app.db.models import ChatwootLegacyMap, ChatwootMapResourceType, User
 from app.integrations.chatwoot import client as chatwoot_client
 from app.schemas.responses.api_response_rule import (
     ResponseStatus,
     ResponseStatusCode,
     api_response,
 )
-from sqlalchemy import and_, select
-
-from app.db.models import ChatwootLegacyMap, ChatwootMapResourceType
 from app.services.v1.handle_chatwoot._shared import (
     _application_error_http_status,
     _chatwoot_agent_id_to_local_map,
@@ -43,7 +46,6 @@ from app.services.v1.handle_chatwoot._shared import (
 
 logger = logging.getLogger(__name__)
 
-# Metric hợp lệ của GET /api/v2/accounts/{id}/reports
 REPORT_METRICS = frozenset(
     {
         "conversations_count",
@@ -59,19 +61,20 @@ REPORT_METRICS = frozenset(
 )
 
 REPORT_TYPES = frozenset({"account", "agent", "inbox", "label", "team"})
-
-# group_by hợp lệ cho timeseries
 REPORT_GROUP_BY = frozenset({"day", "week", "month", "year", "hour"})
-
-# summary_reports/{kind} (Chatwoot >= 4.10)
 SUMMARY_REPORT_KINDS = frozenset({"agent", "team", "label", "channel", "inbox"})
 
 
+@dataclass
+class _ReportCallerScope:
+    elevated: bool
+    token: str
+    chatwoot_user_id: int | None
+    inbox_ids: set[int]
+
+
 def _to_epoch_str(value: Optional[str]) -> Optional[str]:
-    """
-    Chatwoot nhận since/until là unix epoch (giây).
-    Hỗ trợ FE gửi ISO date/datetime cho tiện: '2026-08-01' → epoch.
-    """
+    """Chatwoot nhận since/until unix epoch; hỗ trợ ISO date/datetime."""
     if not value:
         return None
     v = value.strip()
@@ -83,7 +86,7 @@ def _to_epoch_str(value: Optional[str]) -> Optional[str]:
             dt = dt.replace(tzinfo=timezone.utc)
         return str(int(dt.timestamp()))
     except ValueError:
-        return v  # để Chatwoot tự báo lỗi nếu format lạ
+        return v
 
 
 def _bad_request(message: str) -> Any:
@@ -94,6 +97,106 @@ def _bad_request(message: str) -> Any:
     )
 
 
+def _forbidden_scope(message: str, *, code: str = "messaging_reports_scope") -> Any:
+    return api_response(
+        ResponseStatus.ERROR,
+        ResponseStatusCode.FORBIDDEN,
+        message,
+        {"code": code},
+    )
+
+
+async def _load_report_caller_scope(
+    current_user: User,
+    tenant_id: UUID,
+    db: AsyncSession,
+) -> tuple[_ReportCallerScope | None, Any]:
+    from app.services.v1.handle_chatwoot.user_tokens import (
+        ensure_user_chatwoot_api_token,
+        fetch_member_inbox_ids,
+        resolve_chatwoot_user_id,
+        resolve_reports_access_token,
+        user_is_elevated_messaging_admin,
+    )
+
+    denied = await _require_tenant_access(current_user, tenant_id, db)
+    if denied is not None:
+        return None, denied
+
+    token, tok_err = await resolve_reports_access_token(db, current_user)
+    if tok_err is not None:
+        return None, tok_err
+
+    elevated = await user_is_elevated_messaging_admin(db, current_user)
+    if elevated:
+        return _ReportCallerScope(True, token, None, set()), None
+
+    cw_id = await resolve_chatwoot_user_id(db, current_user)
+    personal = await ensure_user_chatwoot_api_token(db, current_user)
+    if cw_id is None or not personal:
+        return None, _forbidden_scope(
+            "Tài khoản chưa sẵn sàng xem báo cáo. Vui lòng liên hệ quản trị viên.",
+            code="chatwoot_user_map_required",
+        )
+    inbox_ids = await fetch_member_inbox_ids(
+        db, current_user, tenant_id, personal_token=personal
+    )
+    return _ReportCallerScope(False, token, int(cw_id), inbox_ids), None
+
+
+def _clamp_report_type_scope(
+    scope: _ReportCallerScope,
+    report_type: str,
+    scope_id: Optional[str],
+) -> tuple[Optional[str], Optional[str], Any]:
+    """Agent: ép cá nhân / inbox member; cấm team/label/account full."""
+    if scope.elevated:
+        return report_type, scope_id, None
+
+    self_id = str(scope.chatwoot_user_id)
+    if report_type in ("account", "agent"):
+        if scope_id and str(scope_id) != self_id:
+            return None, None, _forbidden_scope(
+                "Bạn chỉ xem được báo cáo của chính mình."
+            )
+        return "agent", self_id, None
+
+    if report_type == "inbox":
+        if not scope_id:
+            return "agent", self_id, None
+        try:
+            iid = int(scope_id)
+        except (TypeError, ValueError):
+            return None, None, _bad_request("Hộp thư được chọn không hợp lệ.")
+        if iid not in scope.inbox_ids:
+            return None, None, _forbidden_scope(
+                "Bạn không có quyền xem hộp thư này."
+            )
+        return "inbox", str(iid), None
+
+    return None, None, _forbidden_scope(
+        "Bạn chỉ xem được báo cáo cá nhân hoặc hộp thư mình tham gia."
+    )
+
+
+def _filter_metric_items_by_ids(data: Any, allowed: set[int]) -> Any:
+    def keep(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        try:
+            return int(item.get("id")) in allowed
+        except (TypeError, ValueError):
+            return False
+
+    if isinstance(data, list):
+        return [x for x in data if keep(x)]
+    if isinstance(data, dict) and isinstance(data.get("payload"), list):
+        out = dict(data)
+        out["payload"] = [x for x in data["payload"] if keep(x)]
+        return out
+    return data
+
+
 async def _forward_report(
     current_user: User,
     tenant_id: UUID,
@@ -102,54 +205,60 @@ async def _forward_report(
     path_builder,
     params: list[tuple[str, str]],
     ok_message: str,
-    redact_items: Optional[str] = None,  # "agent" | "team"
+    redact_items: Optional[str] = None,
+    caller_scope: _ReportCallerScope | None = None,
+    filter_item_ids: Optional[set[int]] = None,
 ) -> Any:
     """
-    Forward request báo cáo tới Chatwoot theo account đã map với tenant.
-    path_builder(account_id) → path đầy đủ (v1 hoặc v2).
-    Dùng token agent để Chatwoot enforce quyền báo cáo / phạm vi inbox.
+    Forward báo cáo tới Chatwoot. Dùng admin Application token (Reports cần
+    Administrator); phạm vi agent đã clamp ở caller.
     """
     try:
-        denied = await _require_tenant_access(current_user, tenant_id, db)
-        if denied is not None:
-            return denied
-
-        from app.services.v1.handle_chatwoot.user_tokens import (
-            resolve_agent_scoped_access_token,
-        )
-
-        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
-        if tok_err is not None:
-            return tok_err
+        scope = caller_scope
+        if scope is None:
+            scope, err = await _load_report_caller_scope(current_user, tenant_id, db)
+            if err is not None:
+                return err
+        assert scope is not None
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         path = path_builder(account_id)
         res = await chatwoot_client.application_request(
-            "GET", path, params=params, access_token=user_token
+            "GET", path, params=params, access_token=scope.token
         )
 
         if res.status_code == 200:
             data: Any = res.data
+            if filter_item_ids is not None:
+                data = _filter_metric_items_by_ids(data, filter_item_ids)
             if redact_items:
-                data = await _redact_metric_item_ids(db, tenant_id, data, kind=redact_items)
+                data = await _redact_metric_item_ids(
+                    db, tenant_id, data, kind=redact_items
+                )
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
                 ok_message,
-                {"tenant_id": str(tenant_id), "messaging": data},
+                {
+                    "tenant_id": str(tenant_id),
+                    "messaging": data,
+                    "scope": (
+                        "tenant" if scope.elevated else "personal_or_member_inbox"
+                    ),
+                },
             )
 
         return api_response(
             ResponseStatus.ERROR,
             _application_error_http_status(res.status_code),
-            "Messaging trả lỗi khi lấy báo cáo",
+            "Không lấy được báo cáo. Vui lòng thử lại sau.",
             _chatwoot_error_payload(res),
         )
     except SQLAlchemyError as e:
@@ -219,14 +328,14 @@ async def _translate_agent_scope_id(
     try:
         local_uuid = UUID(scope_id)
     except ValueError:
-        return scope_id, None  # đã là id số / label title
+        return scope_id, None
 
     if report_type == "team":
         row = await _map_tenant_team_by_local(db, tenant_id, local_uuid)
-        not_found_msg = "Không tìm thấy team map với UUID này trong tenant"
+        not_found_msg = "Không tìm thấy nhóm trong doanh nghiệp này."
     else:
         row = await _map_tenant_agent_by_local(db, tenant_id, local_uuid)
-        not_found_msg = "Không tìm thấy agent map với UUID này trong tenant"
+        not_found_msg = "Không tìm thấy nhân viên trong doanh nghiệp này."
 
     if not row:
         return None, api_response(
@@ -238,7 +347,7 @@ async def _translate_agent_scope_id(
 
 
 # ---------------------------------------------------------------------------
-# 1) Timeseries: GET /api/v2/accounts/{id}/reports
+# 1) Timeseries
 # ---------------------------------------------------------------------------
 async def get_report_timeseries(
     request: Request,
@@ -270,11 +379,22 @@ async def get_report_timeseries(
             f"group_by không hợp lệ. Hợp lệ: {', '.join(sorted(REPORT_GROUP_BY))}"
         )
 
+    scope, scope_err = await _load_report_caller_scope(current_user, tenant_id, db)
+    if scope_err is not None:
+        return scope_err
+    assert scope is not None
+
     scope_id, err = await _translate_agent_scope_id(db, tenant_id, report_type, scope_id)
     if err is not None:
         return err
 
-    params: list[tuple[str, str]] = [("metric", metric), ("type", report_type)]
+    report_type, scope_id, clamp_err = _clamp_report_type_scope(
+        scope, report_type, scope_id
+    )
+    if clamp_err is not None:
+        return clamp_err
+
+    params: list[tuple[str, str]] = [("metric", metric), ("type", report_type or "agent")]
     if scope_id:
         params.append(("id", scope_id))
     if since:
@@ -293,11 +413,12 @@ async def get_report_timeseries(
         path_builder=lambda aid: f"/api/v2/accounts/{aid}/reports",
         params=params,
         ok_message="Lấy báo cáo timeseries thành công",
+        caller_scope=scope,
     )
 
 
 # ---------------------------------------------------------------------------
-# 2) Summary: GET /api/v2/accounts/{id}/reports/summary
+# 2) Summary
 # ---------------------------------------------------------------------------
 async def get_report_summary(
     request: Request,
@@ -317,11 +438,22 @@ async def get_report_summary(
             f"type không hợp lệ. Hợp lệ: {', '.join(sorted(REPORT_TYPES))}"
         )
 
+    scope, scope_err = await _load_report_caller_scope(current_user, tenant_id, db)
+    if scope_err is not None:
+        return scope_err
+    assert scope is not None
+
     scope_id, err = await _translate_agent_scope_id(db, tenant_id, report_type, scope_id)
     if err is not None:
         return err
 
-    params: list[tuple[str, str]] = [("type", report_type)]
+    report_type, scope_id, clamp_err = _clamp_report_type_scope(
+        scope, report_type, scope_id
+    )
+    if clamp_err is not None:
+        return clamp_err
+
+    params: list[tuple[str, str]] = [("type", report_type or "agent")]
     if scope_id:
         params.append(("id", scope_id))
     if since:
@@ -338,11 +470,12 @@ async def get_report_summary(
         path_builder=lambda aid: f"/api/v2/accounts/{aid}/reports/summary",
         params=params,
         ok_message="Lấy báo cáo tổng hợp thành công",
+        caller_scope=scope,
     )
 
 
 # ---------------------------------------------------------------------------
-# 3) Realtime conversation metrics (account): open / unattended / unassigned
+# 3) Realtime conversation metrics (account) — agent → cá nhân
 # ---------------------------------------------------------------------------
 async def get_conversation_metrics_account(
     request: Request,
@@ -350,13 +483,31 @@ async def get_conversation_metrics_account(
     tenant_id: UUID,
     db: AsyncSession,
 ):
+    scope, scope_err = await _load_report_caller_scope(current_user, tenant_id, db)
+    if scope_err is not None:
+        return scope_err
+    assert scope is not None
+
+    if scope.elevated:
+        params: list[tuple[str, str]] = [("type", "account")]
+    else:
+        params = [
+            ("type", "agent"),
+            ("user_id", str(scope.chatwoot_user_id)),
+        ]
+
     return await _forward_report(
         current_user,
         tenant_id,
         db,
-        path_builder=lambda aid: f"/api/v2/accounts/{aid}/reports/conversations",
-        params=[("type", "account")],
-        ok_message="Lấy metrics hội thoại (account) thành công",
+        path_builder=lambda aid: (
+            f"/api/v2/accounts/{aid}/reports/conversations"
+            if scope.elevated
+            else f"/api/v2/accounts/{aid}/reports/conversations/"
+        ),
+        params=params,
+        ok_message="Lấy metrics hội thoại thành công",
+        caller_scope=scope,
     )
 
 
@@ -371,11 +522,25 @@ async def get_conversation_metrics_agents(
     *,
     agent_id: Optional[str] = None,
 ):
+    scope, scope_err = await _load_report_caller_scope(current_user, tenant_id, db)
+    if scope_err is not None:
+        return scope_err
+    assert scope is not None
+
     params: list[tuple[str, str]] = [("type", "agent")]
+    filter_ids: Optional[set[int]] = None
 
     remote_id, err = await _translate_agent_scope_id(db, tenant_id, "agent", agent_id)
     if err is not None:
         return err
+
+    if not scope.elevated:
+        self_id = str(scope.chatwoot_user_id)
+        if remote_id and remote_id != self_id:
+            return _forbidden_scope("Bạn chỉ xem được số liệu hội thoại của chính mình.")
+        remote_id = self_id
+        filter_ids = {int(scope.chatwoot_user_id)}
+
     if remote_id:
         params.append(("user_id", remote_id))
 
@@ -387,11 +552,13 @@ async def get_conversation_metrics_agents(
         params=params,
         ok_message="Lấy metrics hội thoại theo agent thành công",
         redact_items="agent",
+        caller_scope=scope,
+        filter_item_ids=filter_ids,
     )
 
 
 # ---------------------------------------------------------------------------
-# 5) Conversation traffic theo giờ (heatmap)
+# 5) Conversation traffic — chỉ elevated (account-wide)
 # ---------------------------------------------------------------------------
 async def get_conversation_traffic(
     request: Request,
@@ -403,6 +570,16 @@ async def get_conversation_traffic(
     since: Optional[str] = None,
     until: Optional[str] = None,
 ):
+    scope, scope_err = await _load_report_caller_scope(current_user, tenant_id, db)
+    if scope_err is not None:
+        return scope_err
+    assert scope is not None
+
+    if not scope.elevated:
+        return _forbidden_scope(
+            "Biểu đồ lưu lượng hội thoại chỉ dành cho quản trị viên."
+        )
+
     params: list[tuple[str, str]] = []
     if timezone_offset:
         params.append(("timezone_offset", timezone_offset))
@@ -418,11 +595,12 @@ async def get_conversation_traffic(
         path_builder=lambda aid: f"/api/v2/accounts/{aid}/reports/conversation_traffic",
         params=params,
         ok_message="Lấy conversation traffic thành công",
+        caller_scope=scope,
     )
 
 
 # ---------------------------------------------------------------------------
-# 6) Summary reports theo agent/team/label/channel (Chatwoot >= 4.10)
+# 6) Summary reports theo agent/team/label/channel
 # ---------------------------------------------------------------------------
 async def get_grouped_summary_report(
     request: Request,
@@ -441,6 +619,33 @@ async def get_grouped_summary_report(
             f"kind không hợp lệ. Hợp lệ: {', '.join(sorted(SUMMARY_REPORT_KINDS))}"
         )
 
+    scope, scope_err = await _load_report_caller_scope(current_user, tenant_id, db)
+    if scope_err is not None:
+        return scope_err
+    assert scope is not None
+
+    filter_ids: Optional[set[int]] = None
+    if not scope.elevated:
+        if kind == "agent":
+            filter_ids = {int(scope.chatwoot_user_id)}
+        elif kind == "inbox":
+            if not scope.inbox_ids:
+                return api_response(
+                    ResponseStatus.SUCCESS,
+                    ResponseStatusCode.OK,
+                    f"Lấy summary report theo {kind} thành công",
+                    {
+                        "tenant_id": str(tenant_id),
+                        "messaging": [],
+                        "scope": "personal_or_member_inbox",
+                    },
+                )
+            filter_ids = set(scope.inbox_ids)
+        else:
+            return _forbidden_scope(
+                "Bạn chỉ xem được báo cáo theo nhân viên (chính mình) hoặc hộp thư mình tham gia."
+            )
+
     params: list[tuple[str, str]] = []
     if since:
         params.append(("since", _to_epoch_str(since)))
@@ -457,6 +662,8 @@ async def get_grouped_summary_report(
         params=params,
         ok_message=f"Lấy summary report theo {kind} thành công",
         redact_items=kind if kind in ("agent", "team") else None,
+        caller_scope=scope,
+        filter_item_ids=filter_ids,
     )
 
 
@@ -473,6 +680,11 @@ async def get_csat_metrics(
     until: Optional[str] = None,
     agent_id: Optional[str] = None,
 ):
+    scope, scope_err = await _load_report_caller_scope(current_user, tenant_id, db)
+    if scope_err is not None:
+        return scope_err
+    assert scope is not None
+
     params: list[tuple[str, str]] = []
     if since:
         params.append(("since", _to_epoch_str(since)))
@@ -482,6 +694,13 @@ async def get_csat_metrics(
     remote_id, err = await _translate_agent_scope_id(db, tenant_id, "agent", agent_id)
     if err is not None:
         return err
+
+    if not scope.elevated:
+        self_id = str(scope.chatwoot_user_id)
+        if remote_id and remote_id != self_id:
+            return _forbidden_scope("Bạn chỉ xem được đánh giá của chính mình.")
+        remote_id = self_id
+
     if remote_id:
         params.append(("user_ids[]", remote_id))
 
@@ -492,6 +711,7 @@ async def get_csat_metrics(
         path_builder=lambda aid: f"/api/v1/accounts/{aid}/csat_survey_responses/metrics",
         params=params,
         ok_message="Lấy CSAT metrics thành công",
+        caller_scope=scope,
     )
 
 
@@ -506,6 +726,11 @@ async def list_csat_responses(
     until: Optional[str] = None,
     agent_id: Optional[str] = None,
 ):
+    scope, scope_err = await _load_report_caller_scope(current_user, tenant_id, db)
+    if scope_err is not None:
+        return scope_err
+    assert scope is not None
+
     params: list[tuple[str, str]] = [("page", str(page))]
     if since:
         params.append(("since", _to_epoch_str(since)))
@@ -515,6 +740,13 @@ async def list_csat_responses(
     remote_id, err = await _translate_agent_scope_id(db, tenant_id, "agent", agent_id)
     if err is not None:
         return err
+
+    if not scope.elevated:
+        self_id = str(scope.chatwoot_user_id)
+        if remote_id and remote_id != self_id:
+            return _forbidden_scope("Bạn chỉ xem được đánh giá của chính mình.")
+        remote_id = self_id
+
     if remote_id:
         params.append(("user_ids[]", remote_id))
 
@@ -525,11 +757,12 @@ async def list_csat_responses(
         path_builder=lambda aid: f"/api/v1/accounts/{aid}/csat_survey_responses",
         params=params,
         ok_message="Lấy danh sách CSAT responses thành công",
+        caller_scope=scope,
     )
 
 
 # ---------------------------------------------------------------------------
-# 8) Overview tổng hợp cho dashboard (gộp nhiều call thành 1 response)
+# 8) Overview dashboard
 # ---------------------------------------------------------------------------
 async def get_dashboard_overview(
     request: Request,
@@ -541,28 +774,21 @@ async def get_dashboard_overview(
     until: Optional[str] = None,
 ):
     """
-    Gộp: summary (kỳ + kỳ trước) + realtime conversation metrics + CSAT metrics.
-    Tiện cho FE render dashboard bằng 1 request.
+    Gộp: summary + realtime conversation metrics + CSAT metrics.
+    Agent: chỉ dữ liệu cá nhân; admin-partner: full tenant.
     """
     try:
-        denied = await _require_tenant_access(current_user, tenant_id, db)
-        if denied is not None:
-            return denied
-
-        from app.services.v1.handle_chatwoot.user_tokens import (
-            resolve_agent_scoped_access_token,
-        )
-
-        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
-        if tok_err is not None:
-            return tok_err
+        scope, scope_err = await _load_report_caller_scope(current_user, tenant_id, db)
+        if scope_err is not None:
+            return scope_err
+        assert scope is not None
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         period: list[tuple[str, str]] = []
@@ -571,23 +797,35 @@ async def get_dashboard_overview(
         if until:
             period.append(("until", _to_epoch_str(until)))
 
+        if scope.elevated:
+            summary_params: list[tuple[str, str]] = [("type", "account"), *period]
+            live_params: list[tuple[str, str]] = [("type", "account")]
+            live_path = f"/api/v2/accounts/{account_id}/reports/conversations"
+            csat_params: list[tuple[str, str]] = list(period)
+        else:
+            self_id = str(scope.chatwoot_user_id)
+            summary_params = [("type", "agent"), ("id", self_id), *period]
+            live_params = [("type", "agent"), ("user_id", self_id)]
+            live_path = f"/api/v2/accounts/{account_id}/reports/conversations/"
+            csat_params = [*period, ("user_ids[]", self_id)]
+
         summary_res = await chatwoot_client.application_request(
             "GET",
             f"/api/v2/accounts/{account_id}/reports/summary",
-            params=[("type", "account"), *period],
-            access_token=user_token,
+            params=summary_params,
+            access_token=scope.token,
         )
         live_res = await chatwoot_client.application_request(
             "GET",
-            f"/api/v2/accounts/{account_id}/reports/conversations",
-            params=[("type", "account")],
-            access_token=user_token,
+            live_path,
+            params=live_params,
+            access_token=scope.token,
         )
         csat_res = await chatwoot_client.application_request(
             "GET",
             f"/api/v1/accounts/{account_id}/csat_survey_responses/metrics",
-            params=period or None,
-            access_token=user_token,
+            params=csat_params or None,
+            access_token=scope.token,
         )
 
         def block(res) -> dict[str, Any]:
@@ -604,6 +842,7 @@ async def get_dashboard_overview(
             "Lấy dashboard overview thành công",
             {
                 "tenant_id": str(tenant_id),
+                "scope": "tenant" if scope.elevated else "personal_or_member_inbox",
                 "summary": block(summary_res),
                 "live_conversations": block(live_res),
                 "csat": block(csat_res),

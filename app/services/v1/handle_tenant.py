@@ -368,7 +368,7 @@ async def createTenant(_, current_user: User, tenant_data: TenantCreate, db: Asy
                     str(delete_ex),
                 )
             await db.rollback()
-            msg = "Gắn user tích hợp vào messaging account thất bại, đã rollback tạo doanh nghiệp"
+            msg = "Không liên kết được kênh trò chuyện, đã hủy tạo doanh nghiệp."
             if link_info.get("skipped_reason"):
                 msg += f". Lý do: {link_info.get('skipped_reason')}"
             return api_response(
@@ -724,7 +724,7 @@ async def _validate_messaging_bot_agent_uuids(
     )
     if missing:
         return (
-            "Agent UUID chưa có map messaging (gọi GET agents trước): "
+            "Không tìm thấy nhân viên trên kênh trò chuyện: "
             + ", ".join(missing)
         )
     return None

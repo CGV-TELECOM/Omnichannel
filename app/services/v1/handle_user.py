@@ -1959,9 +1959,9 @@ async def ensure_my_chatwoot_api_token(db: AsyncSession, current_user: User):
             status=ResponseStatus.SUCCESS if tok else ResponseStatus.ERROR,
             status_code=ResponseStatusCode.OK if tok else ResponseStatusCode.FORBIDDEN,
             message=(
-                "Đã có / đã lấy Chatwoot API token"
+                "Đã kích hoạt kết nối trò chuyện."
                 if tok
-                else "Không lấy được token từ Platform (chưa map hoặc chưa permissible)"
+                else "Không kích hoạt được kết nối trò chuyện. Vui lòng liên hệ quản trị viên."
             ),
             data={
                 "user_id": str(current_user.id),

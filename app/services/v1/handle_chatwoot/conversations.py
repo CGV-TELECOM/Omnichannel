@@ -67,7 +67,7 @@ async def list_conversations(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         raw_pairs = _forward_all_query_pairs(request)
         pairs: list[tuple[str, str]] = []
@@ -80,7 +80,7 @@ async def list_conversations(
                         return api_response(
                             ResponseStatus.ERROR,
                             ResponseStatusCode.NOT_FOUND,
-                            "Không có map team cho UUID này (gọi GET teams để tạo map hoặc tạo team)",
+                            "Không tìm thấy nhóm tương ứng.",
                         )
                     pairs.append((k, str(tm.chatwoot_id)))
                 except ValueError:
@@ -93,7 +93,7 @@ async def list_conversations(
                         return api_response(
                             ResponseStatus.ERROR,
                             ResponseStatusCode.NOT_FOUND,
-                            "Không có map agent cho UUID này (gọi GET agents để tạo map hoặc tạo agent)",
+                            "Không tìm thấy nhân viên tương ứng.",
                         )
                     pairs.append((k, str(am.chatwoot_id)))
                 except ValueError:
@@ -117,7 +117,7 @@ async def list_conversations(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Danh sách conversation messaging (agent id đã map sang UUID)",
+                "Danh sách hội thoại",
                 {
                     "tenant_id": str(tenant_id),
                     "messaging": data,
@@ -163,7 +163,7 @@ async def filter_conversations(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
@@ -232,7 +232,7 @@ async def get_conversation(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         pairs = _forward_all_query_pairs(request)
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
@@ -250,7 +250,7 @@ async def get_conversation(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Chi tiết conversation messaging (agent id đã map sang UUID)",
+                "Chi tiết hội thoại",
                 {
                     "tenant_id": str(tenant_id),
                     "conversation_id": conversation_id,
@@ -324,7 +324,7 @@ async def list_conversation_messages(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         pairs = _forward_all_query_pairs(request)
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
@@ -342,7 +342,7 @@ async def list_conversation_messages(
             return api_response(
                 ResponseStatus.SUCCESS,
                 ResponseStatusCode.OK,
-                "Danh sách tin nhắn conversation (agent id đã map sang UUID)",
+                "Danh sách tin nhắn",
                 {
                     "tenant_id": str(tenant_id),
                     "conversation_id": conversation_id,
@@ -380,7 +380,8 @@ async def assign_conversation(
     POST /api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments
     — [Assign Conversation](https://developers.chatwoot.com/api-reference/conversation-assignments/assign-conversation).
 
-    Sau assign thành công: sync bot flags theo assignee (người → tắt bot, AI Bot → bật).
+    RBAC: assign_messaging_conversation (self) + reassign_messaging_conversation
+    (gán người khác / team, Chatwoot tự enforce). Sau assign: sync bot flags.
     """
     try:
         denied = await _require_tenant_access(current_user, tenant_id, db)
@@ -391,7 +392,7 @@ async def assign_conversation(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         payload: dict[str, Any] = {}
         if body.assignee_agent_uuid is not None:
@@ -400,7 +401,7 @@ async def assign_conversation(
                 return api_response(
                     ResponseStatus.ERROR,
                     ResponseStatusCode.NOT_FOUND,
-                    "Không có map agent cho UUID này (gọi GET agents để tạo map hoặc tạo agent)",
+                    "Không tìm thấy nhân viên tương ứng.",
                 )
             payload["assignee_id"] = m.chatwoot_id
         if body.team_id is not None:
@@ -409,10 +410,25 @@ async def assign_conversation(
                 return api_response(
                     ResponseStatus.ERROR,
                     ResponseStatusCode.NOT_FOUND,
-                    "Không có map team cho UUID này (gọi GET teams để tạo map hoặc tạo team)",
+                    "Không tìm thấy nhóm tương ứng.",
                 )
             if body.assignee_agent_uuid is None:
                 payload["team_id"] = tm.chatwoot_id
+
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            deny_unless_can_assign_assignee,
+        )
+
+        assign_denied = await deny_unless_can_assign_assignee(
+            db,
+            current_user,
+            target_chatwoot_user_id=(
+                int(payload["assignee_id"]) if "assignee_id" in payload else None
+            ),
+            assigning_team="team_id" in payload and "assignee_id" not in payload,
+        )
+        if assign_denied is not None:
+            return assign_denied
 
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
         if tok_err is not None:
@@ -504,7 +520,7 @@ async def assign_conversation_to_ai_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         from app.db.models import Tenant
@@ -528,8 +544,8 @@ async def assign_conversation_to_ai_bot(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.BAD_REQUEST,
                 (
-                    "Chatbot đang tắt (chatbot_enabled=false). "
-                    "Bật lại trong PATCH /tenants/me/settings trước khi giao cho bot."
+                    "Trả lời tự động đang tắt. "
+                    "Vui lòng bật chatbot trong cài đặt trước khi giao cho bot."
                 ),
             )
 
@@ -539,9 +555,8 @@ async def assign_conversation_to_ai_bot(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.BAD_REQUEST,
                 (
-                    "Tenant chưa cấu hình AI Bot (messaging_bots trống hoặc thiếu "
-                    "is_default). Chọn agent từ GET messaging agents rồi PATCH "
-                    "/tenants/me/settings."
+                    "Chưa cấu hình chatbot AI cho doanh nghiệp. "
+                    "Vui lòng thiết lập trong phần cài đặt."
                 ),
             )
 
@@ -610,7 +625,7 @@ async def sync_inbox_bindings(
         return api_response(
             ResponseStatus.ERROR,
             ResponseStatusCode.NOT_FOUND,
-            "Chưa có map messaging account cho tenant này",
+            "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
         )
     try:
         n = await sync_tenant_inbox_bindings(

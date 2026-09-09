@@ -28,6 +28,7 @@ OBSOLETE_PERMISSION_NAMES = frozenset({
 
 # Prefix action trong tên permission (dài → ngắn để match đúng).
 _PERMISSION_ACTION_PREFIXES = (
+    "reassign",
     "assign",
     "manage",
     "create",
@@ -52,6 +53,7 @@ _PERMISSION_BELONG_TO_SPECIAL = {
     "manage_messaging_inbox_members": "messaging_inbox",
     "manage_messaging_team_members": "messaging_team",
     "assign_messaging_conversation": "messaging_conversation",
+    "reassign_messaging_conversation": "messaging_conversation",
     "send_messaging_message": "messaging_message",
     "delete_messaging_message": "messaging_message",
     "view_messaging_reports": "messaging",
@@ -288,6 +290,7 @@ async def seed_rbac(db: AsyncSession):
         "send_messaging_message",
         "delete_messaging_message",
         "assign_messaging_conversation",
+        "reassign_messaging_conversation",
         "view_messaging_inboxes",
         "create_messaging_inbox",
         "edit_messaging_inbox",

@@ -105,7 +105,7 @@ async def create_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Tenant của user chưa có map messaging account",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         exists = await _map_user_by_local(db, user_id)
@@ -113,7 +113,7 @@ async def create_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.CONFLICT,
-                "User đã có map messaging",
+                "Người dùng đã liên kết kênh trò chuyện.",
                 {"messaging_user_id": exists.chatwoot_id},
             )
 
@@ -216,14 +216,14 @@ async def get_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Tenant của user chưa có map messaging account",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         m = await _map_user_by_local(db, user_id)
         if not m:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map user messaging cho UUID này",
+                "Không tìm thấy tài khoản trò chuyện của người dùng này.",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
@@ -283,14 +283,14 @@ async def update_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Tenant của user chưa có map messaging account",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         m = await _map_user_by_local(db, user_id)
         if not m:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map user messaging cho UUID này",
+                "Không tìm thấy tài khoản trò chuyện của người dùng này.",
             )
         payload = _normalize_user_payload_for_agent(
             dict(body.model_dump(mode="json", exclude_unset=True, exclude_none=True)),
@@ -375,14 +375,14 @@ async def delete_user(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Tenant của user chưa có map messaging account",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         m = await _map_user_by_local(db, user_id)
         if not m:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map user messaging cho UUID này",
+                "Không tìm thấy tài khoản trò chuyện của người dùng này.",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.application_request(
@@ -440,7 +440,7 @@ async def get_user_sso_link(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map user messaging cho UUID này",
+                "Không tìm thấy tài khoản trò chuyện của người dùng này.",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.platform_request(

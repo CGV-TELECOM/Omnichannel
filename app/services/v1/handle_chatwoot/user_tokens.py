@@ -339,9 +339,8 @@ def missing_token_api_response():
         ResponseStatus.ERROR,
         ResponseStatusCode.FORBIDDEN,
         (
-            "Tài khoản chưa có Chatwoot API token. "
-            "Gọi POST /api/v1/user/me/ensure-chatwoot-api-token hoặc "
-            "POST /api/v1/user/sync-chatwoot-api-tokens (Platform GET lưu 1 lần)."
+            "Tài khoản chưa sẵn sàng dùng trò chuyện. "
+            "Vui lòng liên hệ quản trị viên để kích hoạt."
         ),
         {
             "code": "chatwoot_api_token_required",
@@ -349,6 +348,71 @@ def missing_token_api_response():
             "bulk_endpoint": "POST /api/v1/user/sync-chatwoot-api-tokens",
         },
     )
+
+
+async def user_is_elevated_messaging_admin(
+    db: AsyncSession, current_user: User
+) -> bool:
+    """Platform admin / admin-partner / level cao nhất trong tenant."""
+    from app.utils.helpers import is_platform_admin, isCheckMaxLevelTenant
+
+    if await is_platform_admin(current_user, db):
+        return True
+    role_name = ""
+    if getattr(current_user, "role", None) is not None:
+        role_name = (current_user.role.name or "").strip().lower()
+    if role_name in {"admin-partner", "admin_partner", "admin partner"}:
+        return True
+    if "admin-partner" in role_name.replace("_", "-"):
+        return True
+    try:
+        return bool(
+            current_user.level is not None
+            and await isCheckMaxLevelTenant(current_user, db)
+        )
+    except Exception:
+        return False
+
+
+def parse_inbox_ids_from_messaging_payload(payload: Any) -> set[int]:
+    """Parse id inbox từ GET /inboxes (payload payload/list)."""
+    out: set[int] = set()
+    raw = payload
+    if isinstance(payload, dict):
+        raw = payload.get("payload", payload.get("data", payload))
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            out.add(int(item.get("id")))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+async def fetch_member_inbox_ids(
+    db: AsyncSession,
+    current_user: User,
+    tenant_id: UUID,
+    *,
+    personal_token: str,
+) -> set[int]:
+    """Inbox agent là member — GET /inboxes bằng token cá nhân."""
+    from app.services.v1.handle_chatwoot._shared import _resolve_account_id
+
+    account_id, _ = await _resolve_account_id(db, tenant_id)
+    if account_id is None:
+        return set()
+    res = await chatwoot_client.application_request(
+        "GET",
+        f"/api/v1/accounts/{int(account_id)}/inboxes",
+        access_token=personal_token,
+    )
+    if res.status_code != 200:
+        return set()
+    return parse_inbox_ids_from_messaging_payload(res.data)
 
 
 async def resolve_agent_scoped_access_token(
@@ -365,27 +429,8 @@ async def resolve_agent_scoped_access_token(
     Trả (token, None) hoặc (None, api_error_response).
     """
     from app.core.config.app_config import settings
-    from app.utils.helpers import is_platform_admin, isCheckMaxLevelTenant
 
-    elevated = await is_platform_admin(current_user, db)
-    if not elevated:
-        role_name = ""
-        if getattr(current_user, "role", None) is not None:
-            role_name = (current_user.role.name or "").strip().lower()
-        if role_name in {"admin-partner", "admin_partner", "admin partner"}:
-            elevated = True
-        elif "admin-partner" in role_name.replace("_", "-"):
-            elevated = True
-    if not elevated:
-        try:
-            elevated = bool(
-                current_user.level is not None
-                and await isCheckMaxLevelTenant(current_user, db)
-            )
-        except Exception:
-            elevated = False
-
-    if elevated:
+    if await user_is_elevated_messaging_admin(db, current_user):
         tok = (settings.CHATWOOT_USER_API_TOKEN or "").strip()
         if not tok:
             return None, missing_token_api_response()
@@ -396,6 +441,116 @@ async def resolve_agent_scoped_access_token(
         return None, missing_token_api_response()
     return tok, None
 
+
+async def resolve_reports_access_token(
+    db: AsyncSession,
+    current_user: User,
+) -> tuple[str | None, Any]:
+    """
+    Chatwoot Reports API cần quyền Administrator trên account.
+
+    Mọi caller (kể cả agent) dùng CHATWOOT_USER_API_TOKEN để gọi API;
+    OmniHub tự clamp scope (cá nhân / inbox member) trước khi trả FE.
+    """
+    from app.core.config.app_config import settings
+
+    tok = (settings.CHATWOOT_USER_API_TOKEN or "").strip()
+    if not tok:
+        return None, missing_token_api_response()
+    # Agent vẫn cần map + personal token để biết inbox membership / id cá nhân.
+    if not await user_is_elevated_messaging_admin(db, current_user):
+        personal = await ensure_user_chatwoot_api_token(db, current_user)
+        if not personal:
+            return None, missing_token_api_response()
+        if await resolve_chatwoot_user_id(db, current_user) is None:
+            from app.schemas.responses.api_response_rule import (
+                ResponseStatus,
+                ResponseStatusCode,
+                api_response,
+            )
+
+            return None, api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.FORBIDDEN,
+                "Tài khoản chưa sẵn sàng xem báo cáo. Vui lòng liên hệ quản trị viên.",
+                {"code": "chatwoot_user_map_required"},
+            )
+    return tok, None
+
+
+
+async def deny_unless_can_assign_assignee(
+    db: AsyncSession,
+    current_user: User,
+    *,
+    target_chatwoot_user_id: int | None,
+    assigning_team: bool = False,
+) -> Any:
+    """
+    RBAC gán hội thoại:
+
+    - Có ``reassign_messaging_conversation``: không clamp OmniHub —
+      Chatwoot tự enforce (inbox membership / role agent).
+    - Chỉ có ``assign_messaging_conversation``: chỉ self-assign.
+
+    Trả api_response lỗi hoặc None nếu OK.
+    """
+    from app.core.security.permissions import get_user_permissions
+    from app.schemas.responses.api_response_rule import (
+        ResponseStatus,
+        ResponseStatusCode,
+        api_response,
+    )
+
+    perms = await get_user_permissions(current_user.id, db)
+    if "reassign_messaging_conversation" in perms:
+        return None
+
+    if assigning_team and target_chatwoot_user_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "Bạn chỉ được tự nhận hội thoại. Gán theo nhóm cần quyền quản lý phân công.",
+            {"code": "reassign_messaging_conversation_required"},
+        )
+
+    if target_chatwoot_user_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "Bạn chỉ được tự nhận hội thoại cho mình.",
+            {"code": "reassign_messaging_conversation_required"},
+        )
+
+    self_id = await resolve_chatwoot_user_id(db, current_user)
+    if self_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "Tài khoản chưa liên kết kênh trò chuyện — không thể tự nhận hội thoại.",
+            {"code": "chatwoot_user_map_required"},
+        )
+
+    try:
+        target = int(target_chatwoot_user_id)
+    except (TypeError, ValueError):
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.BAD_REQUEST,
+            "Nhân viên được chọn không hợp lệ.",
+        )
+
+    if target != int(self_id):
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "Bạn chỉ được tự nhận hội thoại, không được gán cho nhân viên khác.",
+            {
+                "code": "reassign_messaging_conversation_required",
+                "allowed_assignee": "self",
+            },
+        )
+    return None
 
 
 async def resolve_chatwoot_user_id(db: AsyncSession, user: User) -> int | None:

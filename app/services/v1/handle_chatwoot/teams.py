@@ -81,7 +81,7 @@ async def list_teams(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
@@ -158,7 +158,7 @@ async def create_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         payload = body.model_dump(exclude_none=True)
@@ -235,7 +235,7 @@ async def get_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -243,7 +243,7 @@ async def get_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map Team cho UUID này",
+                "Không tìm thấy nhóm tương ứng.",
             )
 
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
@@ -306,7 +306,7 @@ async def update_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -314,7 +314,7 @@ async def update_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map Team cho UUID này",
+                "Không tìm thấy nhóm tương ứng.",
             )
 
         payload = body.model_dump(exclude_unset=True, exclude_none=True)
@@ -385,7 +385,7 @@ async def delete_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -393,7 +393,7 @@ async def delete_team(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map Team cho UUID này",
+                "Không tìm thấy nhóm tương ứng.",
             )
 
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
@@ -453,7 +453,7 @@ async def list_team_members(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -461,7 +461,7 @@ async def list_team_members(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map Team cho UUID này",
+                "Không tìm thấy nhóm tương ứng.",
             )
 
         user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
@@ -544,7 +544,7 @@ async def _modify_team_members(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
 
         m = await _map_tenant_team_by_local(db, tenant_id, team_id)
@@ -552,7 +552,7 @@ async def _modify_team_members(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map Team cho UUID này",
+                "Không tìm thấy nhóm tương ứng.",
             )
 
         cw_agent_ids, missing_uuids = await _translate_local_agent_uuids_to_remote(
@@ -562,7 +562,7 @@ async def _modify_team_members(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                f"Không tìm thấy map agent cho các UUID sau: {', '.join(missing_uuids)}",
+                "Không tìm thấy một hoặc nhiều nhân viên đã chọn.",
             )
 
         payload = {"user_ids": cw_agent_ids}

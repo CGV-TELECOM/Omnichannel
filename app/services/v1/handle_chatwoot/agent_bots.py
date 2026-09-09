@@ -102,7 +102,7 @@ async def list_tenant_agent_bots(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.platform_request(
@@ -177,7 +177,7 @@ async def create_agent_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         payload = _platform_agent_bot_create_payload(body, account_id)
         pairs = _forward_all_query_pairs(request)
@@ -250,14 +250,14 @@ async def get_agent_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         m = await _map_tenant_agent_bot_by_local(db, tenant_id, bot_id)
         if not m:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map AgentBot cho UUID này",
+                "Không tìm thấy chatbot tương ứng.",
             )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.platform_request(
@@ -316,14 +316,14 @@ async def update_agent_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         m = await _map_tenant_agent_bot_by_local(db, tenant_id, bot_id)
         if not m:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map AgentBot cho UUID này",
+                "Không tìm thấy chatbot tương ứng.",
             )
         pairs = _forward_all_query_pairs(request)
         get_res = await chatwoot_client.platform_request(
@@ -405,14 +405,14 @@ async def delete_agent_bot(
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Chưa có map messaging account cho tenant này",
+                "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
             )
         m = await _map_tenant_agent_bot_by_local(db, tenant_id, bot_id)
         if not m:
             return api_response(
                 ResponseStatus.ERROR,
                 ResponseStatusCode.NOT_FOUND,
-                "Không có map AgentBot cho UUID này",
+                "Không tìm thấy chatbot tương ứng.",
             )
         pairs = _forward_all_query_pairs(request)
         get_res = await chatwoot_client.platform_request(
