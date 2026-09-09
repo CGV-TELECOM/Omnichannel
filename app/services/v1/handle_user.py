@@ -1030,6 +1030,29 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
 
             await capture_token_into_user_meta(new_user, chatwoot_created_id)
 
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            assign_chatwoot_agent_to_inboxes,
+            collect_messaging_inbox_ids_for_assign,
+        )
+
+        tenant_row = await db.get(Tenant, user_tenant_id) if user_tenant_id else None
+        tenant_meta = (
+            tenant_row.meta_data
+            if tenant_row is not None and isinstance(tenant_row.meta_data, dict)
+            else None
+        )
+        inbox_ids = collect_messaging_inbox_ids_for_assign(
+            new_user.meta_data if isinstance(new_user.meta_data, dict) else None,
+            tenant_meta,
+        )
+        inbox_assign_result: dict[str, Any] | None = None
+        if inbox_ids:
+            inbox_assign_result = await assign_chatwoot_agent_to_inboxes(
+                account_id=int(account_id),
+                chatwoot_user_id=chatwoot_created_id,
+                inbox_ids=inbox_ids,
+            )
+
         try:
             await db.commit()
         except IntegrityError as e:
@@ -1075,6 +1098,8 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
             messaging_synced=True,
             include_webcall=True,
         )
+        if inbox_assign_result is not None:
+            user_response["inbox_assign"] = inbox_assign_result
 
         return api_response(
             status=ResponseStatus.SUCCESS,
@@ -1851,6 +1876,30 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
             token_ok = True
         else:
             token_ok = await capture_token_into_user_meta(user, agent_id)
+
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            assign_chatwoot_agent_to_inboxes,
+            collect_messaging_inbox_ids_for_assign,
+        )
+
+        tenant_row = await db.get(Tenant, user.tenant_id) if user.tenant_id else None
+        tenant_meta = (
+            tenant_row.meta_data
+            if tenant_row is not None and isinstance(tenant_row.meta_data, dict)
+            else None
+        )
+        inbox_ids = collect_messaging_inbox_ids_for_assign(
+            user.meta_data if isinstance(user.meta_data, dict) else None,
+            tenant_meta,
+        )
+        inbox_assign_result: dict[str, Any] | None = None
+        if inbox_ids and agent_id is not None:
+            inbox_assign_result = await assign_chatwoot_agent_to_inboxes(
+                account_id=int(account_id),
+                chatwoot_user_id=int(agent_id),
+                inbox_ids=inbox_ids,
+            )
+
         try:
             await db.commit()
         except SQLAlchemyError:
@@ -1878,6 +1927,7 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
                 "messaging_synced": True,
                 "has_chatwoot_api_access_token": token_ok
                 or user_has_chatwoot_api_token(user),
+                "inbox_assign": inbox_assign_result,
             },
         )
     except SQLAlchemyError as e:

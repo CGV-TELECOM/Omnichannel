@@ -414,9 +414,9 @@ async def assign_conversation(
             if body.assignee_agent_uuid is None:
                 payload["team_id"] = tm.chatwoot_id
 
-        user_token = await ensure_user_chatwoot_api_token(db, current_user)
-        if not user_token:
-            return missing_token_api_response()
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
 
         res = await chatwoot_client.application_request(
             "POST",

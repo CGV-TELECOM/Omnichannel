@@ -31,6 +31,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _map_tenant_agent_bot_by_local,
     _platform_agent_bot_create_payload,
     _platform_agent_bot_update_payload,
+    _require_tenant_access,
     _resolve_account_id,
     _tenant_application_forward,
 )
@@ -43,12 +44,6 @@ async def list_all_agent_bots(
 ):
     """GET /platform/api/v1/agent_bots — toàn bộ bot trên instance messaging (Platform API)."""
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
         pairs = _forward_all_query_pairs(request)
         res = await chatwoot_client.platform_request(
             "GET", "/platform/api/v1/agent_bots", params=pairs or None
@@ -99,12 +94,9 @@ async def list_tenant_agent_bots(
 ):
     """Lọc bot thuộc đúng messaging account đã map với tenant."""
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(
@@ -177,12 +169,9 @@ async def create_agent_bot(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(
@@ -253,12 +242,9 @@ async def get_agent_bot(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(
@@ -322,12 +308,9 @@ async def update_agent_bot(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(
@@ -414,12 +397,9 @@ async def delete_agent_bot(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
             return api_response(

@@ -658,6 +658,104 @@ def _rating_query_filters(
     return filters
 
 
+def _parse_inbox_ids_from_messaging_payload(data: Any) -> set[int]:
+    """Chatwoot GET /inboxes → {payload:[…]} hoặc list."""
+    items: Any = data
+    if isinstance(data, dict):
+        if isinstance(data.get("payload"), list):
+            items = data["payload"]
+        elif isinstance(data.get("data"), list):
+            items = data["data"]
+    out: set[int] = set()
+    if not isinstance(items, list):
+        return out
+    for it in items:
+        if not isinstance(it, dict) or it.get("id") is None:
+            continue
+        try:
+            out.add(int(it["id"]))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+async def _csat_inbox_acl_filters(
+    db: AsyncSession,
+    current_user: User,
+    tenant_id: UUID,
+    *,
+    requested_inbox_id: int | None = None,
+) -> tuple[list[Any] | None, Any]:
+    """
+    Agent thường chỉ thấy CSAT của inbox mình là member (GET /inboxes bằng token cá nhân).
+    Platform admin / admin-partner (level cao nhất tenant): không siết inbox.
+
+    Trả (extra_sql_filters, error_response).
+    """
+    from sqlalchemy import false
+
+    from app.services.v1.handle_chatwoot.user_tokens import (
+        resolve_agent_scoped_access_token,
+    )
+    from app.utils.helpers import isCheckMaxLevelTenant
+
+    elevated = await is_platform_admin(current_user, db)
+    if not elevated:
+        role_name = ""
+        if getattr(current_user, "role", None) is not None:
+            role_name = (current_user.role.name or "").strip().lower()
+        if role_name in {"admin-partner", "admin_partner", "admin partner"}:
+            elevated = True
+        elif "admin-partner" in role_name.replace("_", "-"):
+            elevated = True
+    if not elevated:
+        try:
+            elevated = bool(
+                current_user.level is not None
+                and await isCheckMaxLevelTenant(current_user, db)
+            )
+        except Exception:
+            elevated = False
+
+    if elevated:
+        if requested_inbox_id is not None:
+            return [ConversationRating.inbox_id == int(requested_inbox_id)], None
+        return [], None
+
+    token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+    if tok_err is not None:
+        return None, tok_err
+
+    account_id, _ = await _resolve_account_id(db, tenant_id)
+    if account_id is None:
+        return None, api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.NOT_FOUND,
+            "Chưa có map messaging account cho tenant này",
+        )
+
+    res = await chatwoot_client.application_request(
+        "GET",
+        f"/api/v1/accounts/{int(account_id)}/inboxes",
+        access_token=token,
+    )
+    allowed = (
+        _parse_inbox_ids_from_messaging_payload(res.data)
+        if res.status_code == 200
+        else set()
+    )
+
+    if requested_inbox_id is not None:
+        rid = int(requested_inbox_id)
+        if rid not in allowed:
+            return [false()], None
+        return [ConversationRating.inbox_id == rid], None
+
+    if not allowed:
+        return [false()], None
+    return [ConversationRating.inbox_id.in_(sorted(allowed))], None
+
+
 def _ratings_count_from_rows(
     score_rows: list[tuple[Any, Any]],
 ) -> dict[str, int]:
@@ -734,14 +832,23 @@ async def get_ratings_metrics(
         return denied
 
     try:
+        acl_extra, acl_err = await _csat_inbox_acl_filters(
+            db, current_user, tenant_id, requested_inbox_id=inbox_id
+        )
+        if acl_err is not None:
+            return acl_err
+
+        # inbox_id đã xử lý trong ACL (admin áp dụng trong helper; agent intersect).
         filters = _rating_query_filters(
             tenant_id,
             since=since,
             until=until,
             channel=channel,
-            inbox_id=inbox_id,
+            inbox_id=None,
             agent_chatwoot_id=agent_chatwoot_id,
         )
+        if acl_extra:
+            filters.extend(acl_extra)
         submitted_filters = filters + [
             ConversationRating.status == ConversationRatingStatus.SUBMITTED.value,
             ConversationRating.score.isnot(None),
@@ -841,15 +948,23 @@ async def list_rating_responses(
         return denied
 
     try:
+        acl_extra, acl_err = await _csat_inbox_acl_filters(
+            db, current_user, tenant_id, requested_inbox_id=inbox_id
+        )
+        if acl_err is not None:
+            return acl_err
+
         filters = _rating_query_filters(
             tenant_id,
             since=since,
             until=until,
             status=status,
             channel=channel,
-            inbox_id=inbox_id,
+            inbox_id=None,
             agent_chatwoot_id=agent_chatwoot_id,
         )
+        if acl_extra:
+            filters.extend(acl_extra)
 
         total_q = await db.execute(
             select(func.count()).select_from(ConversationRating).where(and_(*filters))
@@ -1546,13 +1661,19 @@ async def list_ratings(
         return denied
 
     try:
+        acl_extra, acl_err = await _csat_inbox_acl_filters(
+            db, current_user, tenant_id, requested_inbox_id=inbox_id
+        )
+        if acl_err is not None:
+            return acl_err
+
         filters = [ConversationRating.tenant_id == tenant_id]
         if status:
             filters.append(ConversationRating.status == status)
         if channel:
             filters.append(ConversationRating.channel == channel)
-        if inbox_id is not None:
-            filters.append(ConversationRating.inbox_id == int(inbox_id))
+        if acl_extra:
+            filters.extend(acl_extra)
 
         from sqlalchemy import func
 

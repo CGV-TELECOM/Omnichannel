@@ -170,6 +170,127 @@ async def provision_account_agent_via_platform(
     )
 
 
+USER_INBOX_IDS_META_KEY = "chatwoot_inbox_ids"
+TENANT_DEFAULT_INBOX_IDS_META_KEY = "default_messaging_inbox_ids"
+
+
+def collect_messaging_inbox_ids_for_assign(
+    *meta_sources: dict[str, Any] | None,
+) -> list[int]:
+    """Gộp inbox id từ user.meta / tenant.meta (chatwoot_inbox_ids | default_messaging_inbox_ids)."""
+    seen: set[int] = set()
+    ordered: list[int] = []
+    keys = (USER_INBOX_IDS_META_KEY, TENANT_DEFAULT_INBOX_IDS_META_KEY)
+    for meta in meta_sources:
+        if not isinstance(meta, dict):
+            continue
+        for key in keys:
+            raw = meta.get(key)
+            if raw is None:
+                continue
+            items = raw if isinstance(raw, (list, tuple)) else [raw]
+            for item in items:
+                try:
+                    iid = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if iid <= 0 or iid in seen:
+                    continue
+                seen.add(iid)
+                ordered.append(iid)
+    return ordered
+
+
+async def assign_chatwoot_agent_to_inboxes(
+    *,
+    account_id: int,
+    chatwoot_user_id: int,
+    inbox_ids: list[int],
+) -> dict[str, Any]:
+    """Best-effort POST inbox_members (Application admin token) cho từng inbox."""
+    ok: list[int] = []
+    failed: list[dict[str, Any]] = []
+    for iid in inbox_ids:
+        try:
+            res = await chatwoot_client.application_request(
+                "POST",
+                f"/api/v1/accounts/{int(account_id)}/inbox_members",
+                json_body={
+                    "inbox_id": int(iid),
+                    "user_ids": [int(chatwoot_user_id)],
+                },
+            )
+        except Exception as exc:
+            failed.append({"inbox_id": iid, "error": str(exc)[:200]})
+            continue
+        if res.status_code in (200, 201):
+            ok.append(int(iid))
+        else:
+            failed.append(
+                {
+                    "inbox_id": iid,
+                    "status_code": res.status_code,
+                    "response": res.data,
+                }
+            )
+    return {
+        "assigned": ok,
+        "failed": failed,
+        "requested": list(inbox_ids),
+    }
+
+
+async def recover_platform_access_token_for_user(
+    user: User,
+    chatwoot_user_id: int,
+) -> str | None:
+    """
+    Lấy token: Platform GET trước; nếu 401/thiếu (user cũ Application API) →
+    Platform POST /users theo email để grant PlatformAppPermissible rồi lấy token.
+    Không cần Rails patch.
+    """
+    tok = await try_fetch_platform_user_access_token(chatwoot_user_id)
+    if tok:
+        return tok
+
+    email = (user.email or "").strip()
+    if not email:
+        return None
+
+    body: dict[str, Any] = {
+        "name": (user.fullname or user.username or email).strip(),
+        "email": email,
+        "password": _platform_user_password(None),
+    }
+    try:
+        res = await chatwoot_client.platform_request(
+            "POST", "/platform/api/v1/users", json_body=body
+        )
+    except Exception:
+        logger.exception(
+            "Platform re-touch user thất bại cw_user_id=%s", chatwoot_user_id
+        )
+        return None
+
+    if res.status_code in (200, 201) and isinstance(res.data, dict):
+        tok = (res.data.get("access_token") or "").strip()[:512] or None
+        if tok:
+            return tok
+        # id có thể đổi? thường cùng email → cùng id
+        try:
+            returned_id = int(res.data.get("id") or chatwoot_user_id)
+        except (TypeError, ValueError):
+            returned_id = chatwoot_user_id
+        return await try_fetch_platform_user_access_token(returned_id)
+
+    logger.info(
+        "Platform re-touch cw_user_id=%s status=%s",
+        chatwoot_user_id,
+        res.status_code,
+    )
+    return None
+
+
 def get_user_chatwoot_api_token(user: User | None) -> str | None:
     if user is None:
         return None
@@ -235,17 +356,36 @@ async def resolve_agent_scoped_access_token(
     current_user: User,
 ) -> tuple[str | None, Any]:
     """
-    Token gọi Application API theo quyền agent (inbox membership).
+    Token gọi Application API theo quyền trong tenant.
 
     - Agent thường: token cá nhân (Chatwoot enforce inbox ACL).
-    - Platform admin: CHATWOOT_USER_API_TOKEN (xem full account để ops).
+    - Platform admin, admin-partner, hoặc level cao nhất trong tenant:
+      CHATWOOT_USER_API_TOKEN — quản trị full account messaging của tenant.
 
     Trả (token, None) hoặc (None, api_error_response).
     """
     from app.core.config.app_config import settings
-    from app.utils.helpers import is_platform_admin
+    from app.utils.helpers import is_platform_admin, isCheckMaxLevelTenant
 
-    if await is_platform_admin(current_user, db):
+    elevated = await is_platform_admin(current_user, db)
+    if not elevated:
+        role_name = ""
+        if getattr(current_user, "role", None) is not None:
+            role_name = (current_user.role.name or "").strip().lower()
+        if role_name in {"admin-partner", "admin_partner", "admin partner"}:
+            elevated = True
+        elif "admin-partner" in role_name.replace("_", "-"):
+            elevated = True
+    if not elevated:
+        try:
+            elevated = bool(
+                current_user.level is not None
+                and await isCheckMaxLevelTenant(current_user, db)
+            )
+        except Exception:
+            elevated = False
+
+    if elevated:
         tok = (settings.CHATWOOT_USER_API_TOKEN or "").strip()
         if not tok:
             return None, missing_token_api_response()
@@ -322,7 +462,7 @@ async def ensure_user_chatwoot_api_token(
         logger.info("ensure_token: user=%s chưa map messaging", user.id)
         return None
 
-    tok = await try_fetch_platform_user_access_token(cw_id)
+    tok = await recover_platform_access_token_for_user(user, cw_id)
     if not tok:
         return None
 
@@ -345,7 +485,7 @@ async def capture_token_into_user_meta(
     """Gọi trước commit create/sync — ghi token vào meta nếu lấy được (chưa commit)."""
     if user_has_chatwoot_api_token(user):
         return True
-    tok = await try_fetch_platform_user_access_token(chatwoot_user_id)
+    tok = await recover_platform_access_token_for_user(user, chatwoot_user_id)
     if not tok:
         return False
     set_user_chatwoot_api_token(user, tok)
@@ -359,7 +499,7 @@ async def bulk_backfill_tenant_chatwoot_api_tokens(
     only_missing: bool = True,
     force_refresh: bool = False,
 ) -> dict[str, Any]:
-    """Backfill token cả tenant — mỗi user Platform GET 1 lần rồi lưu."""
+    """Backfill token cả tenant — GET; thiếu thì Platform re-touch theo email."""
     stmt = select(User).where(User.tenant_id == tenant_id, User.is_active != 0)
     users = list((await db.execute(stmt)).scalars().all())
 
@@ -381,11 +521,11 @@ async def bulk_backfill_tenant_chatwoot_api_tokens(
 
     sem = asyncio.Semaphore(_BULK_CONCURRENCY)
 
-    async def _fetch(cw_id: int) -> tuple[int, str | None]:
+    async def _fetch(u: User, cw_id: int) -> tuple[int, str | None]:
         async with sem:
-            return cw_id, await try_fetch_platform_user_access_token(cw_id)
+            return cw_id, await recover_platform_access_token_for_user(u, cw_id)
 
-    fetched = await asyncio.gather(*[_fetch(cw_id) for _, cw_id in pending])
+    fetched = await asyncio.gather(*[_fetch(u, cw_id) for u, cw_id in pending])
     token_by_cw = {cw_id: tok for cw_id, tok in fetched}
 
     for u, cw_id in pending:

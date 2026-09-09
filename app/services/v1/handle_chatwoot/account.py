@@ -30,6 +30,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _map_tenant_team_by_local,
     _platform_account_payload_provision,
     _platform_account_payload_update,
+    _require_tenant_access,
     _resolve_account_id,
     _tenant_application_forward,
     _translate_local_agent_uuids_to_remote,
@@ -615,12 +616,9 @@ async def bulk_action_account(
     }
     """
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
 
@@ -714,12 +712,17 @@ async def remove_inbox_members(
 ):
     """DELETE /api/v1/accounts/{account_id}/inbox_members — cùng body POST/PATCH."""
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
+
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            resolve_agent_scoped_access_token,
+        )
+
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
@@ -749,6 +752,7 @@ async def remove_inbox_members(
             f"/api/v1/accounts/{account_id}/inbox_members",
             json_body=payload,
             params=pairs or None,
+            access_token=user_token,
         )
         if res.status_code in (200, 201, 204):
             return api_response(
@@ -794,12 +798,17 @@ async def add_new_agent_inboxes(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
+
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            resolve_agent_scoped_access_token,
+        )
+
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
 
@@ -832,6 +841,7 @@ async def add_new_agent_inboxes(
             f"/api/v1/accounts/{account_id}/inbox_members",
             json_body=payload,
             params=pairs or None,
+            access_token=user_token,
         )
 
         data = res.data
@@ -880,12 +890,17 @@ async def patch_new_agent_inboxes(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
+
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            resolve_agent_scoped_access_token,
+        )
+
+        user_token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+        if tok_err is not None:
+            return tok_err
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
 
@@ -918,6 +933,7 @@ async def patch_new_agent_inboxes(
             f"/api/v1/accounts/{account_id}/inbox_members",
             json_body=payload,
             params=pairs or None,
+            access_token=user_token,
         )
 
         data = res.data
@@ -965,12 +981,9 @@ async def get_custom_filters(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
 
@@ -1057,12 +1070,9 @@ async def custom_filters(
     }
     """
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
 
@@ -1133,12 +1143,9 @@ async def update_custom_filter(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
 
@@ -1211,12 +1218,9 @@ async def delete_custom_filter(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
 

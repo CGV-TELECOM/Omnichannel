@@ -26,6 +26,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _ensure_tenant_agent_map,
     _ensure_tenant_agent_maps_bulk,
     _map_tenant_agent_by_local,
+    _require_tenant_access,
     _resolve_account_id,
 )
 from app.services.v1.handle_chatwoot.user_tokens import resolve_agent_scoped_access_token
@@ -132,12 +133,9 @@ async def create_agent(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:
@@ -282,12 +280,9 @@ async def delete_agent(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
+        denied = await _require_tenant_access(current_user, tenant_id, db)
+        if denied is not None:
+            return denied
 
         account_id, _ = await _resolve_account_id(db, tenant_id)
         if account_id is None:

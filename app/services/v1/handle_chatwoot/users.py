@@ -25,6 +25,7 @@ from app.services.v1.handle_chatwoot._shared import (
     _forward_all_query_pairs,
     _map_user_by_local,
     _merge_chatwoot_platform_user_payload,
+    _require_tenant_access,
     _resolve_account_id,
 )
 
@@ -86,14 +87,14 @@ async def create_user(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
 
         local_user, account_id, _ = await _require_user_and_account(db, user_id)
+        if local_user is not None and local_user.tenant_id is not None:
+            denied = await _require_tenant_access(
+                current_user, UUID(str(local_user.tenant_id)), db
+            )
+            if denied is not None:
+                return denied
         if not local_user:
             return api_response(
                 ResponseStatus.ERROR,
@@ -198,13 +199,13 @@ async def get_user(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
         local_user, account_id, _ = await _require_user_and_account(db, user_id)
+        if local_user is not None and local_user.tenant_id is not None:
+            denied = await _require_tenant_access(
+                current_user, UUID(str(local_user.tenant_id)), db
+            )
+            if denied is not None:
+                return denied
         if not local_user:
             return api_response(
                 ResponseStatus.ERROR,
@@ -265,13 +266,13 @@ async def update_user(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
         local_user, account_id, _ = await _require_user_and_account(db, user_id)
+        if local_user is not None and local_user.tenant_id is not None:
+            denied = await _require_tenant_access(
+                current_user, UUID(str(local_user.tenant_id)), db
+            )
+            if denied is not None:
+                return denied
         if not local_user:
             return api_response(
                 ResponseStatus.ERROR,
@@ -357,13 +358,13 @@ async def delete_user(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
-            )
         local_user, account_id, _ = await _require_user_and_account(db, user_id)
+        if local_user is not None and local_user.tenant_id is not None:
+            denied = await _require_tenant_access(
+                current_user, UUID(str(local_user.tenant_id)), db
+            )
+            if denied is not None:
+                return denied
         if not local_user:
             return api_response(
                 ResponseStatus.ERROR,
@@ -427,12 +428,13 @@ async def get_user_sso_link(
     db: AsyncSession,
 ):
     try:
-        if not await is_platform_admin(current_user, db):
-            return api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Chỉ quản trị viên mới thực hiện được thao tác này",
+        local_user, _, _ = await _require_user_and_account(db, user_id)
+        if local_user is not None and local_user.tenant_id is not None:
+            denied = await _require_tenant_access(
+                current_user, UUID(str(local_user.tenant_id)), db
             )
+            if denied is not None:
+                return denied
         m = await _map_user_by_local(db, user_id)
         if not m:
             return api_response(
