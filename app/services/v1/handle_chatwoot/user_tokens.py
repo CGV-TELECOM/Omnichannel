@@ -1,8 +1,13 @@
 """Chatwoot Application API token theo OmniHub user (sender = chủ token).
 
 Lưu 1 lần: users.meta_data.chatwoot_api_access_token
-Nguồn: Platform GET /platform/api/v1/users/{id} → access_token
-(Chatwoot cần PlatformAppPermissible — đã auto trên server Chatwoot).
+
+Nguồn ưu tiên khi tạo mới:
+  Platform POST /users (response access_token) + POST account_users
+→ không cần Rails patch PlatformAppPermissible cho user mới.
+
+Fallback / backfill: Platform GET /users/{id} → access_token
+(user do Platform App tạo thì GET được trên Chatwoot stock).
 
 Không fallback đổi password. Không silent-fallback CHATWOOT_USER_API_TOKEN khi gửi tin.
 """
@@ -11,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -26,6 +33,141 @@ logger = logging.getLogger(__name__)
 CHATWOOT_API_TOKEN_META_KEY = "chatwoot_api_access_token"
 HAS_CHATWOOT_API_TOKEN_PUBLIC_KEY = "has_chatwoot_api_access_token"
 _BULK_CONCURRENCY = 8
+_CHATWOOT_ACCOUNT_ROLES = frozenset({"agent", "administrator"})
+
+
+def _platform_user_password(preferred: str | None) -> str:
+    """Chatwoot Platform thường yêu cầu hoa/thường/số/ký tự đặc biệt."""
+    raw = (preferred or "").strip()
+    if (
+        len(raw) >= 8
+        and any(c.isupper() for c in raw)
+        and any(c.islower() for c in raw)
+        and any(c.isdigit() for c in raw)
+        and any(not c.isalnum() for c in raw)
+    ):
+        return raw
+    return f"Aa1!{secrets.token_urlsafe(24)}"
+
+
+@dataclass(slots=True)
+class PlatformAgentProvision:
+    ok: bool
+    chatwoot_user_id: int | None = None
+    access_token: str | None = None
+    status_code: int = 0
+    error_data: Any = None
+    role: str = "agent"
+
+
+async def provision_account_agent_via_platform(
+    *,
+    account_id: int,
+    name: str,
+    email: str,
+    password: str | None = None,
+    display_name: str | None = None,
+    role: str = "agent",
+    availability: str | None = None,
+    auto_offline: bool | None = None,
+) -> PlatformAgentProvision:
+    """
+    Tạo (hoặc tái sử dụng email) user qua Platform API, gắn vào account, lấy access_token.
+
+    Stock Chatwoot: create user tự gắn PlatformAppPermissible → không cần patch Rails.
+    Account phải đã permissible với Platform App (account tạo qua Platform / đã grant).
+    """
+    role_norm = (role or "agent").strip().lower()
+    if role_norm not in _CHATWOOT_ACCOUNT_ROLES:
+        role_norm = "agent"
+
+    body: dict[str, Any] = {
+        "name": (name or "").strip() or email,
+        "email": (email or "").strip(),
+        "password": _platform_user_password(password),
+    }
+    dn = (display_name or "").strip()
+    if dn:
+        body["display_name"] = dn
+
+    create_res = await chatwoot_client.platform_request(
+        "POST", "/platform/api/v1/users", json_body=body
+    )
+    if create_res.status_code not in (200, 201) or not isinstance(create_res.data, dict):
+        return PlatformAgentProvision(
+            ok=False,
+            status_code=create_res.status_code or 502,
+            error_data=create_res.data,
+            role=role_norm,
+        )
+    try:
+        cw_id = int(create_res.data["id"])
+    except (TypeError, ValueError, KeyError):
+        return PlatformAgentProvision(
+            ok=False,
+            status_code=502,
+            error_data=create_res.data,
+            role=role_norm,
+        )
+
+    tok = (create_res.data.get("access_token") or "").strip()[:512] or None
+
+    link_res = await chatwoot_client.platform_request(
+        "POST",
+        f"/platform/api/v1/accounts/{int(account_id)}/account_users",
+        json_body={"user_id": cw_id, "role": role_norm},
+    )
+    if link_res.status_code not in (200, 201):
+        # Chỉ gỡ membership — không xóa user (email có thể đã tồn tại trước đó).
+        try:
+            await chatwoot_client.platform_request(
+                "DELETE",
+                f"/platform/api/v1/accounts/{int(account_id)}/account_users",
+                json_body={"user_id": cw_id},
+            )
+        except Exception:
+            logger.exception(
+                "Compensation unlink account_user thất bại account=%s user=%s",
+                account_id,
+                cw_id,
+            )
+        return PlatformAgentProvision(
+            ok=False,
+            chatwoot_user_id=cw_id,
+            status_code=link_res.status_code or 502,
+            error_data=link_res.data,
+            role=role_norm,
+        )
+
+    if availability is not None or auto_offline is not None:
+        patch_body: dict[str, Any] = {}
+        if availability is not None:
+            patch_body["availability"] = availability
+        if auto_offline is not None:
+            patch_body["auto_offline"] = auto_offline
+        try:
+            await chatwoot_client.application_request(
+                "PATCH",
+                f"/api/v1/accounts/{int(account_id)}/agents/{cw_id}",
+                json_body=patch_body,
+            )
+        except Exception:
+            logger.exception(
+                "Best-effort PATCH availability agent=%s account=%s thất bại",
+                cw_id,
+                account_id,
+            )
+
+    if not tok:
+        tok = await try_fetch_platform_user_access_token(cw_id)
+
+    return PlatformAgentProvision(
+        ok=True,
+        chatwoot_user_id=cw_id,
+        access_token=tok,
+        status_code=200,
+        role=role_norm,
+    )
 
 
 def get_user_chatwoot_api_token(user: User | None) -> str | None:

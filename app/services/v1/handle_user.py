@@ -958,40 +958,52 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
             core=chatwoot_core,
         )
         _ensure_agent_payload_for_chatwoot(chatwoot_payload, new_user)
-        chatwoot_res = await chatwoot_client.application_request(
-            "POST",
-            f"/api/v1/accounts/{account_id}/agents",
-            json_body=chatwoot_payload,
+
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            provision_account_agent_via_platform,
+            set_user_chatwoot_api_token,
+        )
+
+        # Platform POST user + account_users → access_token (stock Chatwoot, không cần patch).
+        provision = await provision_account_agent_via_platform(
+            account_id=int(account_id),
+            name=str(chatwoot_payload.get("name") or new_user.fullname or new_user.username),
+            email=str(chatwoot_payload.get("email") or new_user.email),
+            password=user_data.password,
+            display_name=(
+                str(chatwoot_payload["display_name"])
+                if chatwoot_payload.get("display_name")
+                else None
+            ),
+            role=str(chatwoot_payload.get("role") or "agent"),
+            availability=(
+                str(chatwoot_payload["availability"])
+                if chatwoot_payload.get("availability") is not None
+                else None
+            ),
+            auto_offline=(
+                bool(chatwoot_payload["auto_offline"])
+                if chatwoot_payload.get("auto_offline") is not None
+                else None
+            ),
         )
 
         chatwoot_created_id: int | None = None
-        if (
-            chatwoot_res.status_code not in (200, 201)
-            or not isinstance(chatwoot_res.data, dict)
-            or chatwoot_res.data.get("id") is None
-        ):
+        if not provision.ok or provision.chatwoot_user_id is None:
             await db.rollback()
             return api_response(
                 status=ResponseStatus.ERROR,
-                status_code=chatwoot_res.status_code
-                if chatwoot_res.status_code in (401, 404, 409, 422, 503)
+                status_code=provision.status_code
+                if provision.status_code in (401, 403, 404, 409, 422, 503)
                 else 502,
                 message="Tạo agent trên messaging thất bại, đã rollback tạo user nội bộ",
                 data={
-                    "messaging_status_code": chatwoot_res.status_code,
-                    "messaging_response": chatwoot_res.data,
+                    "messaging_status_code": provision.status_code,
+                    "messaging_response": provision.error_data,
+                    "provision_via": "platform_api",
                 },
             )
-        try:
-            chatwoot_created_id = int(chatwoot_res.data["id"])
-        except (TypeError, ValueError):
-            await db.rollback()
-            return api_response(
-                status=ResponseStatus.ERROR,
-                status_code=502,
-                message="Messaging trả id agent không hợp lệ, đã rollback tạo user nội bộ",
-                data={"messaging_response": chatwoot_res.data},
-            )
+        chatwoot_created_id = int(provision.chatwoot_user_id)
 
         db.add(
             ChatwootLegacyMap(
@@ -1009,9 +1021,14 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
         new_user.meta_data["chatwoot_agent"] = {
             k: v for k, v in chatwoot_payload.items() if k != "password"
         }
-        from app.services.v1.handle_chatwoot.user_tokens import capture_token_into_user_meta
+        if provision.access_token:
+            set_user_chatwoot_api_token(new_user, provision.access_token)
+        else:
+            from app.services.v1.handle_chatwoot.user_tokens import (
+                capture_token_into_user_meta,
+            )
 
-        await capture_token_into_user_meta(new_user, chatwoot_created_id)
+            await capture_token_into_user_meta(new_user, chatwoot_created_id)
 
         try:
             await db.commit()
@@ -1280,6 +1297,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
         requested_deactivate = "is_active" in update_data and update_data.get("is_active") == 0
         sync_agent = (scalar_cw or meta_chatwoot_sync) and not requested_deactivate
         chatwoot_merged: dict[str, Any] | None = None
+        update_provision_token: str | None = None
 
         # Nếu disable user bằng update API thì bắt buộc xóa agent trên messaging trước.
         if requested_deactivate:
@@ -1338,36 +1356,46 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                         status_code=ResponseStatusCode.BAD_REQUEST,
                         message="User không có email để tạo Agent messaging",
                     )
-                create_res = await chatwoot_client.application_request(
-                    "POST",
-                    f"/api/v1/accounts/{account_id}/agents",
-                    json_body=create_payload,
+                from app.services.v1.handle_chatwoot.user_tokens import (
+                    provision_account_agent_via_platform,
                 )
-                if (
-                    create_res.status_code not in (200, 201)
-                    or not isinstance(create_res.data, dict)
-                    or create_res.data.get("id") is None
-                ):
+
+                provision = await provision_account_agent_via_platform(
+                    account_id=int(account_id),
+                    name=str(create_payload.get("name") or user.fullname or user.username),
+                    email=str(create_payload.get("email") or user.email),
+                    password=raw_password_for_chatwoot,
+                    display_name=(
+                        str(create_payload["display_name"])
+                        if create_payload.get("display_name")
+                        else None
+                    ),
+                    role=str(create_payload.get("role") or "agent"),
+                    availability=(
+                        str(create_payload["availability"])
+                        if create_payload.get("availability") is not None
+                        else None
+                    ),
+                    auto_offline=(
+                        bool(create_payload["auto_offline"])
+                        if create_payload.get("auto_offline") is not None
+                        else None
+                    ),
+                )
+                if not provision.ok or provision.chatwoot_user_id is None:
                     return api_response(
                         status=ResponseStatus.ERROR,
-                        status_code=create_res.status_code
-                        if create_res.status_code in (401, 404, 409, 422, 503)
+                        status_code=provision.status_code
+                        if provision.status_code in (401, 403, 404, 409, 422, 503)
                         else 502,
                         message="Tạo Agent trên messaging thất bại",
                         data={
-                            "messaging_status_code": create_res.status_code,
-                            "messaging_response": create_res.data,
+                            "messaging_status_code": provision.status_code,
+                            "messaging_response": provision.error_data,
+                            "provision_via": "platform_api",
                         },
                     )
-                try:
-                    new_agent_id = int(create_res.data["id"])
-                except (TypeError, ValueError):
-                    return api_response(
-                        status=ResponseStatus.ERROR,
-                        status_code=502,
-                        message="Messaging trả id agent không hợp lệ",
-                        data={"messaging_response": create_res.data},
-                    )
+                new_agent_id = int(provision.chatwoot_user_id)
                 user_chatwoot_map = ChatwootLegacyMap(
                     resource_type=ChatwootMapResourceType.USER,
                     local_uuid=user.id,
@@ -1377,6 +1405,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                 db.add(user_chatwoot_map)
                 user.chat_id = new_agent_id
                 chatwoot_merged = create_payload
+                update_provision_token = provision.access_token
             else:
                 cw_res = await chatwoot_client.application_request(
                     "PATCH",
@@ -1459,10 +1488,13 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
             user.meta_data = md_u
             from app.services.v1.handle_chatwoot.user_tokens import (
                 capture_token_into_user_meta,
+                set_user_chatwoot_api_token,
                 user_has_chatwoot_api_token,
             )
 
-            if user.chat_id is not None and not user_has_chatwoot_api_token(user):
+            if update_provision_token:
+                set_user_chatwoot_api_token(user, update_provision_token)
+            elif user.chat_id is not None and not user_has_chatwoot_api_token(user):
                 await capture_token_into_user_meta(user, int(user.chat_id))
 
         # Đổi password hoặc disable user → vô hiệu hóa JWT hiện tại
@@ -1693,35 +1725,52 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
         )
         _ensure_agent_payload_for_chatwoot(create_payload, user)
 
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            capture_token_into_user_meta,
+            provision_account_agent_via_platform,
+            set_user_chatwoot_api_token,
+            user_has_chatwoot_api_token,
+        )
+
+        provision_token: str | None = None
         if agent_id is None:
-            create_res = await chatwoot_client.application_request(
-                "POST",
-                f"/api/v1/accounts/{account_id}/agents",
-                json_body=create_payload,
+            provision = await provision_account_agent_via_platform(
+                account_id=int(account_id),
+                name=str(create_payload.get("name") or user.fullname or user.username),
+                email=str(create_payload.get("email") or user.email),
+                password=None,
+                display_name=(
+                    str(create_payload["display_name"])
+                    if create_payload.get("display_name")
+                    else None
+                ),
+                role=str(create_payload.get("role") or "agent"),
+                availability=(
+                    str(create_payload["availability"])
+                    if create_payload.get("availability") is not None
+                    else None
+                ),
+                auto_offline=(
+                    bool(create_payload["auto_offline"])
+                    if create_payload.get("auto_offline") is not None
+                    else None
+                ),
             )
-            if (
-                create_res.status_code not in (200, 201)
-                or not isinstance(create_res.data, dict)
-                or create_res.data.get("id") is None
-            ):
+            if not provision.ok or provision.chatwoot_user_id is None:
                 return api_response(
                     status=ResponseStatus.ERROR,
-                    status_code=create_res.status_code
-                    if create_res.status_code in (401, 404, 409, 422, 503)
+                    status_code=provision.status_code
+                    if provision.status_code in (401, 403, 404, 409, 422, 503)
                     else 502,
                     message="Tạo agent trên messaging thất bại",
-                    data={"messaging_response": create_res.data},
+                    data={
+                        "messaging_response": provision.error_data,
+                        "provision_via": "platform_api",
+                    },
                 )
-            try:
-                agent_id = int(create_res.data["id"])
-            except (TypeError, ValueError):
-                return api_response(
-                    status=ResponseStatus.ERROR,
-                    status_code=502,
-                    message="Messaging trả id agent không hợp lệ",
-                    data={"messaging_response": create_res.data},
-                )
+            agent_id = int(provision.chatwoot_user_id)
             created_agent_id = agent_id
+            provision_token = provision.access_token
         else:
             patch_res = await chatwoot_client.application_request(
                 "PATCH",
@@ -1729,34 +1778,45 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
                 json_body=create_payload,
             )
             if patch_res.status_code == 404:
-                recreate_res = await chatwoot_client.application_request(
-                    "POST",
-                    f"/api/v1/accounts/{account_id}/agents",
-                    json_body=create_payload,
+                provision = await provision_account_agent_via_platform(
+                    account_id=int(account_id),
+                    name=str(
+                        create_payload.get("name") or user.fullname or user.username
+                    ),
+                    email=str(create_payload.get("email") or user.email),
+                    password=None,
+                    display_name=(
+                        str(create_payload["display_name"])
+                        if create_payload.get("display_name")
+                        else None
+                    ),
+                    role=str(create_payload.get("role") or "agent"),
+                    availability=(
+                        str(create_payload["availability"])
+                        if create_payload.get("availability") is not None
+                        else None
+                    ),
+                    auto_offline=(
+                        bool(create_payload["auto_offline"])
+                        if create_payload.get("auto_offline") is not None
+                        else None
+                    ),
                 )
-                if (
-                    recreate_res.status_code not in (200, 201)
-                    or not isinstance(recreate_res.data, dict)
-                    or recreate_res.data.get("id") is None
-                ):
+                if not provision.ok or provision.chatwoot_user_id is None:
                     return api_response(
                         status=ResponseStatus.ERROR,
-                        status_code=recreate_res.status_code
-                        if recreate_res.status_code in (401, 404, 409, 422, 503)
+                        status_code=provision.status_code
+                        if provision.status_code in (401, 403, 404, 409, 422, 503)
                         else 502,
                         message="Không thể tái tạo agent trên messaging",
-                        data={"messaging_response": recreate_res.data},
+                        data={
+                            "messaging_response": provision.error_data,
+                            "provision_via": "platform_api",
+                        },
                     )
-                try:
-                    agent_id = int(recreate_res.data["id"])
-                except (TypeError, ValueError):
-                    return api_response(
-                        status=ResponseStatus.ERROR,
-                        status_code=502,
-                        message="Messaging trả id agent không hợp lệ",
-                        data={"messaging_response": recreate_res.data},
-                    )
+                agent_id = int(provision.chatwoot_user_id)
                 created_agent_id = agent_id
+                provision_token = provision.access_token
             elif patch_res.status_code != 200:
                 return api_response(
                     status=ResponseStatus.ERROR,
@@ -1786,12 +1846,11 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
         user.meta_data["chatwoot_agent"] = {
             k: v for k, v in create_payload.items() if k != "password"
         }
-        from app.services.v1.handle_chatwoot.user_tokens import (
-            capture_token_into_user_meta,
-            user_has_chatwoot_api_token,
-        )
-
-        token_ok = await capture_token_into_user_meta(user, agent_id)
+        if provision_token:
+            set_user_chatwoot_api_token(user, provision_token)
+            token_ok = True
+        else:
+            token_ok = await capture_token_into_user_meta(user, agent_id)
         try:
             await db.commit()
         except SQLAlchemyError:
