@@ -264,8 +264,10 @@ class SocketManager:
         Returns True if the user has active sessions and message was emitted, False otherwise.
         """
         try:
+            from app.schemas.responses.api_response_rule import convert_for_json
+
             room = f"user:{user_id}"
-            await self.sio.emit(event, data, room=room)
+            await self.sio.emit(event, convert_for_json(data), room=room)
             is_online = self.is_user_online(user_id)
             logger.info(f"Sent '{event}' to user {user_id} (online={is_online})")
             return is_online
@@ -278,8 +280,10 @@ class SocketManager:
         Send message to all users in a tenant
         """
         try:
+            from app.schemas.responses.api_response_rule import convert_for_json
+
             room = f"tenant:{tenant_id}"
-            await self.sio.emit(event, data, room=room)
+            await self.sio.emit(event, convert_for_json(data), room=room)
             logger.info(f"Sent '{event}' to tenant {tenant_id}")
         except Exception as e:
             logger.error(f"Error sending to tenant {tenant_id}: {str(e)}")
@@ -289,7 +293,9 @@ class SocketManager:
         Broadcast message to all connected clients
         """
         try:
-            await self.sio.emit(event, data, skip_sid=skip_sid)
+            from app.schemas.responses.api_response_rule import convert_for_json
+
+            await self.sio.emit(event, convert_for_json(data), skip_sid=skip_sid)
             logger.info(f"Broadcasted '{event}' to all clients")
         except Exception as e:
             logger.error(f"Error broadcasting: {str(e)}")
@@ -299,7 +305,9 @@ class SocketManager:
         Send message to specific channel/room
         """
         try:
-            await self.sio.emit(event, data, room=channel)
+            from app.schemas.responses.api_response_rule import convert_for_json
+
+            await self.sio.emit(event, convert_for_json(data), room=channel)
             logger.info(f"Sent '{event}' to channel {channel}")
         except Exception as e:
             logger.error(f"Error sending to channel {channel}: {str(e)}")

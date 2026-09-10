@@ -958,6 +958,8 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
         )
 
         chatwoot_account_role = resolve_chatwoot_account_role(assigned_omnihub_role_name)
+        if new_user.is_platform_admin:
+            chatwoot_account_role = "administrator"
         chatwoot_core = {
             "name": new_user.fullname or new_user.username,
             "email": new_user.email,

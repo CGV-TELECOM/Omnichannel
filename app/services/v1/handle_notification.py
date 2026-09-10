@@ -3,17 +3,44 @@ Notification Service
 Handles creation, storage, and real-time delivery of notifications
 """
 from uuid import UUID
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, update
 from app.core.socket.manager import socket_manager
-from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode
+from app.schemas.responses.api_response_rule import api_response, ResponseStatus, ResponseStatusCode, convert_for_json
 from app.db.models import Notification, NotificationType as NotificationTypeEnum, User
 import logging
 import json
 
 logger = logging.getLogger(__name__)
+
+
+def _dt_iso(value: Any) -> str | None:
+    """Serialize datetime (or pass-through ISO string) for socket/API JSON."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _socket_notification_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure notification dict is JSON-serializable for Socket.IO emit."""
+    out = dict(payload)
+    if "timestamp" in out:
+        out["timestamp"] = _dt_iso(out.get("timestamp"))
+    if "created_at" in out:
+        out["created_at"] = _dt_iso(out.get("created_at"))
+    if "read_at" in out:
+        out["read_at"] = _dt_iso(out.get("read_at"))
+    # Nested data may still hold UUID/datetime
+    return convert_for_json(out)
+
 
 class NotificationType:
     """Notification types"""
@@ -71,7 +98,7 @@ class NotificationService:
                 await db.commit()
                 await db.refresh(notification_record)
             
-            notification_data = {
+            notification_data = _socket_notification_payload({
                 "id": str(notification_record.id) if notification_record else None,
                 "title": title,
                 "message": message,
@@ -79,7 +106,7 @@ class NotificationService:
                 "timestamp": datetime.now(timezone.utc),
                 "data": data or {},
                 "read": False
-            }
+            })
             
             # Try to send via WebSocket
             result = await socket_manager.send_to_user(
@@ -115,14 +142,14 @@ class NotificationService:
         Send real-time notification to all users in a tenant
         """
         try:
-            notification_data = {
+            notification_data = _socket_notification_payload({
                 "title": title,
                 "message": message,
                 "type": notification_type,
                 "timestamp": datetime.now(timezone.utc),
                 "data": data or {},
                 "read": False
-            }
+            })
             
             # Send via WebSocket
             await socket_manager.send_to_tenant(
@@ -149,14 +176,14 @@ class NotificationService:
         Broadcast notification to all connected users
         """
         try:
-            notification_data = {
+            notification_data = _socket_notification_payload({
                 "title": title,
                 "message": message,
                 "type": notification_type,
                 "timestamp": datetime.now(timezone.utc),
                 "data": data or {},
                 "read": False
-            }
+            })
             
             # Send via WebSocket
             await socket_manager.broadcast(
@@ -363,7 +390,7 @@ class NotificationService:
             sent_count = 0
             for notification in notifications:
                 try:
-                    notification_data = {
+                    notification_data = _socket_notification_payload({
                         "id": str(notification.id),
                         "title": notification.title,
                         "message": notification.message,
@@ -372,7 +399,7 @@ class NotificationService:
                         "data": json.loads(notification.data) if notification.data else {},
                         "read": bool(notification.is_read),
                         "missed": True  # Flag to indicate this is a missed notification
-                    }
+                    })
                     
                     # Send via WebSocket
                     result = await socket_manager.send_to_user(
@@ -463,10 +490,10 @@ class NotificationService:
             result = await db.execute(query)
             notifications = result.scalars().all()
             
-            # Convert to dict
+            # Convert to dict (ISO timestamps — JSON-safe for API clients)
             notification_list = []
             for n in notifications:
-                notification_list.append({
+                notification_list.append(convert_for_json({
                     "id": str(n.id),
                     "title": n.title,
                     "message": n.message,
@@ -476,7 +503,7 @@ class NotificationService:
                     "created_at": n.created_at,
                     "read_at": n.read_at,
                     "data": json.loads(n.data) if n.data else {}
-                })
+                }))
             
             return notification_list
             

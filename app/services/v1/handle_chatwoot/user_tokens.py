@@ -48,14 +48,34 @@ def omnihub_role_is_admin_partner(name: str | None) -> bool:
     return n == "admin-partner" or "admin-partner" in n
 
 
+def omnihub_role_is_platform_admin_name(name: str | None) -> bool:
+    """Role catalog platform (CGV): admin / super-admin — không gồm admin-partner."""
+    n = normalize_omnihub_role_name(name)
+    if not n or omnihub_role_is_admin_partner(name):
+        return False
+    return n in {
+        "admin",
+        "super-admin",
+        "superadmin",
+        "platform-admin",
+        "platformadmin",
+    }
+
+
 def resolve_chatwoot_account_role(omnihub_role_name: str | None) -> str:
     """
     Map OmniHub role → Chatwoot account role.
 
-    admin-partner → administrator (full trong đúng 1 account/tenant).
-    Các role khác → agent (ACL theo inbox).
+    - admin-partner → administrator (full đúng 1 tenant account)
+    - admin / super-admin (platform catalog) → administrator
+    - còn lại → agent (ACL inbox)
+
+    Cờ ``user.is_platform_admin`` được ưu tiên ở
+    ``resolve_chatwoot_account_role_for_user``.
     """
     if omnihub_role_is_admin_partner(omnihub_role_name):
+        return "administrator"
+    if omnihub_role_is_platform_admin_name(omnihub_role_name):
         return "administrator"
     return "agent"
 
@@ -66,8 +86,16 @@ async def resolve_chatwoot_account_role_for_user(
     *,
     role_id: UUID | None = None,
 ) -> str:
-    """Lấy Chatwoot account role từ role OmniHub của user (hoặc role_id sắp gán)."""
+    """Lấy Chatwoot account role từ platform flag + role OmniHub."""
     from app.db.models import Role
+    from app.utils.helpers import is_platform_admin
+
+    # Super admin OmniHub (= SuperAdmin/ops trên Chatwoot): luôn administrator
+    # trên account messaging — không được sync xuống agent.
+    if bool(getattr(user, "is_platform_admin", False)) or await is_platform_admin(
+        user, db
+    ):
+        return "administrator"
 
     rid = role_id if role_id is not None else getattr(user, "role_id", None)
     if rid is not None:

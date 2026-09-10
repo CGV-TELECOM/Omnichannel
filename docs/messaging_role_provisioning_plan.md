@@ -22,9 +22,9 @@
 
 | OmniHub role | Chatwoot `account_users.role` | Token UI |
 |--------------|-------------------------------|----------|
+| **admin** (platform / `is_platform_admin`) | **`administrator`** | Env `CHATWOOT_USER_API_TOKEN` hoặc personal nếu cùng identity SuperAdmin |
 | **admin-partner** | **`administrator`** | Token cá nhân (fallback env nếu chưa có) |
 | **user** (agent) | **`agent`** | Token cá nhân + ACL inbox |
-| **admin** (platform) | Không map 1–1 | `CHATWOOT_USER_API_TOKEN` |
 | Bot gửi tin khách | N/A | `messaging_bots[]` / `CHATWOOT_BOT_API_TOKEN` |
 
 Env admin token vẫn dùng cho: platform ops, webhook/job, bootstrap, reports của **agent** (API Chatwoot cần Administrator + OmniHub clamp).
