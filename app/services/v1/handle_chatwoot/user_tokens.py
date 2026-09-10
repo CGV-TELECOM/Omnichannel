@@ -36,6 +36,97 @@ _BULK_CONCURRENCY = 8
 _CHATWOOT_ACCOUNT_ROLES = frozenset({"agent", "administrator"})
 
 
+def normalize_omnihub_role_name(name: str | None) -> str:
+    """Chuẩn hóa tên role OmniHub để so khớp (admin-partner / admin_partner / …)."""
+    return (name or "").strip().lower().replace("_", "-").replace(" ", "-")
+
+
+def omnihub_role_is_admin_partner(name: str | None) -> bool:
+    n = normalize_omnihub_role_name(name)
+    if not n:
+        return False
+    return n == "admin-partner" or "admin-partner" in n
+
+
+def resolve_chatwoot_account_role(omnihub_role_name: str | None) -> str:
+    """
+    Map OmniHub role → Chatwoot account role.
+
+    admin-partner → administrator (full trong đúng 1 account/tenant).
+    Các role khác → agent (ACL theo inbox).
+    """
+    if omnihub_role_is_admin_partner(omnihub_role_name):
+        return "administrator"
+    return "agent"
+
+
+async def resolve_chatwoot_account_role_for_user(
+    db: AsyncSession,
+    user: User,
+    *,
+    role_id: UUID | None = None,
+) -> str:
+    """Lấy Chatwoot account role từ role OmniHub của user (hoặc role_id sắp gán)."""
+    from app.db.models import Role
+
+    rid = role_id if role_id is not None else getattr(user, "role_id", None)
+    if rid is not None:
+        role = await db.get(Role, rid)
+        if role is not None and (role.name or "").strip():
+            return resolve_chatwoot_account_role(role.name)
+    rel = getattr(user, "role", None)
+    if rel is not None and (getattr(rel, "name", None) or "").strip():
+        return resolve_chatwoot_account_role(rel.name)
+    return "agent"
+
+
+async def patch_chatwoot_agent_account_role(
+    *,
+    account_id: int,
+    chatwoot_user_id: int,
+    role: str,
+    access_token: str | None = None,
+) -> tuple[bool, int, Any]:
+    """
+    Đồng bộ Chatwoot account role (agent|administrator).
+
+    Ưu tiên Application PATCH /agents/{id}; fallback Platform POST account_users.
+    """
+    role_norm = (role or "agent").strip().lower()
+    if role_norm not in _CHATWOOT_ACCOUNT_ROLES:
+        role_norm = "agent"
+
+    app_res = await chatwoot_client.application_request(
+        "PATCH",
+        f"/api/v1/accounts/{int(account_id)}/agents/{int(chatwoot_user_id)}",
+        json_body={"role": role_norm},
+        access_token=access_token,
+    )
+    if app_res.status_code in (200, 201):
+        return True, int(app_res.status_code), app_res.data
+
+    link_res = await chatwoot_client.platform_request(
+        "POST",
+        f"/platform/api/v1/accounts/{int(account_id)}/account_users",
+        json_body={"user_id": int(chatwoot_user_id), "role": role_norm},
+    )
+    if link_res.status_code in (200, 201):
+        return True, int(link_res.status_code), link_res.data
+
+    logger.warning(
+        "PATCH Chatwoot role thất bại account=%s user=%s role=%s app=%s platform=%s",
+        account_id,
+        chatwoot_user_id,
+        role_norm,
+        app_res.status_code,
+        link_res.status_code,
+    )
+    return False, int(link_res.status_code or app_res.status_code or 502), {
+        "application": {"status": app_res.status_code, "data": app_res.data},
+        "platform": {"status": link_res.status_code, "data": link_res.data},
+    }
+
+
 def _platform_user_password(preferred: str | None) -> str:
     """Chatwoot Platform thường yêu cầu hoa/thường/số/ký tự đặc biệt."""
     raw = (preferred or "").strip()
@@ -354,10 +445,12 @@ async def user_is_elevated_messaging_admin(
     db: AsyncSession, current_user: User
 ) -> bool:
     """
-    Platform admin / admin-partner → dùng token admin env (full account tenant).
+    Platform admin / admin-partner → phạm vi messaging **full trong tenant**
+    (báo cáo, list hội thoại không clamp inbox agent).
 
-    Không dùng level cao nhất tenant: agent thường vẫn có thể là max level
-    trong tenant nhỏ → nếu escalate sẽ thấy all hội thoại (lệch Chatwoot UI).
+    Không đồng nghĩa phải dùng CHATWOOT_USER_API_TOKEN — partner dùng token
+    cá nhân sau khi đã là Chatwoot administrator trên account tenant.
+    Không dùng level cao nhất tenant để escalate (agent max-level vẫn ACL inbox).
     """
     from app.utils.helpers import is_platform_admin
 
@@ -365,12 +458,8 @@ async def user_is_elevated_messaging_admin(
         return True
     role_name = ""
     if getattr(current_user, "role", None) is not None:
-        role_name = (current_user.role.name or "").strip().lower()
-    if role_name in {"admin-partner", "admin_partner", "admin partner"}:
-        return True
-    if "admin-partner" in role_name.replace("_", "-"):
-        return True
-    return False
+        role_name = current_user.role.name or ""
+    return omnihub_role_is_admin_partner(role_name)
 
 
 def parse_inbox_ids_from_messaging_payload(payload: Any) -> set[int]:
@@ -421,24 +510,38 @@ async def resolve_agent_scoped_access_token(
     """
     Token gọi Application API theo quyền trong tenant.
 
-    - Agent thường: token cá nhân (Chatwoot enforce inbox ACL).
-    - Platform admin, admin-partner, hoặc level cao nhất trong tenant:
-      CHATWOOT_USER_API_TOKEN — quản trị full account messaging của tenant.
+    - Agent + admin-partner: token **cá nhân** (partner phải là Chatwoot
+      administrator trên account tenant để full inbox).
+    - Platform admin: ``CHATWOOT_USER_API_TOKEN`` (ops cross-tenant / không
+      gắn personal map).
+    - Admin-partner thiếu personal token: fallback env (transition) + warning.
 
     Trả (token, None) hoặc (None, api_error_response).
     """
     from app.core.config.app_config import settings
+    from app.utils.helpers import is_platform_admin
 
-    if await user_is_elevated_messaging_admin(db, current_user):
+    if await is_platform_admin(current_user, db):
         tok = (settings.CHATWOOT_USER_API_TOKEN or "").strip()
         if not tok:
             return None, missing_token_api_response()
         return tok, None
 
     tok = await ensure_user_chatwoot_api_token(db, current_user)
-    if not tok:
-        return None, missing_token_api_response()
-    return tok, None
+    if tok:
+        return tok, None
+
+    if await user_is_elevated_messaging_admin(db, current_user):
+        env_tok = (settings.CHATWOOT_USER_API_TOKEN or "").strip()
+        if env_tok:
+            logger.warning(
+                "admin-partner user=%s thiếu personal Chatwoot token — "
+                "fallback CHATWOOT_USER_API_TOKEN (chạy sync role/token)",
+                getattr(current_user, "id", None),
+            )
+            return env_tok, None
+
+    return None, missing_token_api_response()
 
 
 async def resolve_reports_access_token(
@@ -448,32 +551,55 @@ async def resolve_reports_access_token(
     """
     Chatwoot Reports API cần quyền Administrator trên account.
 
-    Mọi caller (kể cả agent) dùng CHATWOOT_USER_API_TOKEN để gọi API;
-    OmniHub tự clamp scope (cá nhân / inbox member) trước khi trả FE.
+    - Platform admin: env admin token.
+    - Admin-partner: token cá nhân (đã là administrator trên account);
+      thiếu thì fallback env.
+    - Agent: env token để gọi API + cần personal/map để OmniHub clamp scope.
     """
     from app.core.config.app_config import settings
+    from app.utils.helpers import is_platform_admin
 
+    elevated = await user_is_elevated_messaging_admin(db, current_user)
+
+    if await is_platform_admin(current_user, db):
+        tok = (settings.CHATWOOT_USER_API_TOKEN or "").strip()
+        if not tok:
+            return None, missing_token_api_response()
+        return tok, None
+
+    if elevated:
+        personal = await ensure_user_chatwoot_api_token(db, current_user)
+        if personal:
+            return personal, None
+        env_tok = (settings.CHATWOOT_USER_API_TOKEN or "").strip()
+        if env_tok:
+            logger.warning(
+                "admin-partner user=%s reports fallback env admin token",
+                getattr(current_user, "id", None),
+            )
+            return env_tok, None
+        return None, missing_token_api_response()
+
+    # Agent: Reports API thường cần Administrator → gọi bằng env; clamp ở OmniHub.
     tok = (settings.CHATWOOT_USER_API_TOKEN or "").strip()
     if not tok:
         return None, missing_token_api_response()
-    # Agent vẫn cần map + personal token để biết inbox membership / id cá nhân.
-    if not await user_is_elevated_messaging_admin(db, current_user):
-        personal = await ensure_user_chatwoot_api_token(db, current_user)
-        if not personal:
-            return None, missing_token_api_response()
-        if await resolve_chatwoot_user_id(db, current_user) is None:
-            from app.schemas.responses.api_response_rule import (
-                ResponseStatus,
-                ResponseStatusCode,
-                api_response,
-            )
+    personal = await ensure_user_chatwoot_api_token(db, current_user)
+    if not personal:
+        return None, missing_token_api_response()
+    if await resolve_chatwoot_user_id(db, current_user) is None:
+        from app.schemas.responses.api_response_rule import (
+            ResponseStatus,
+            ResponseStatusCode,
+            api_response,
+        )
 
-            return None, api_response(
-                ResponseStatus.ERROR,
-                ResponseStatusCode.FORBIDDEN,
-                "Tài khoản chưa sẵn sàng xem báo cáo. Vui lòng liên hệ quản trị viên.",
-                {"code": "chatwoot_user_map_required"},
-            )
+        return None, api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.FORBIDDEN,
+            "Tài khoản chưa sẵn sàng xem báo cáo. Vui lòng liên hệ quản trị viên.",
+            {"code": "chatwoot_user_map_required"},
+        )
     return tok, None
 
 

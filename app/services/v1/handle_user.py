@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 from app.core.security.jwt import get_user_id_from_token
 from app.core.security.permissions import get_user_permissions
 from sqlalchemy.orm import joinedload
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import or_, func, asc, desc, and_
 from app.core.security.password_utils import hash_password 
 from sqlalchemy import update
@@ -869,11 +870,13 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
                 )
 
         # Kiểm tra role_id nếu có — role platform chỉ cho CGV; role tenant phải khớp tenant
+        assigned_omnihub_role_name: str | None = None
         if user_data.role_id:
             stmt = select(Role).where(Role.id == user_data.role_id, Role.is_active == 1)
             stmt_result = await db.scalar(stmt)
             if not stmt_result:
                 return api_response(ResponseStatus.ERROR, ResponseStatusCode.NOT_FOUND, "Vai trò không tồn tại hoặc đã bị khóa")
+            assigned_omnihub_role_name = stmt_result.name
             will_be_platform_admin = bool(
                 is_supper_admin and user_data.is_platform_admin is True
             )
@@ -948,21 +951,25 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
                 message="Tenant chưa được map với messaging account, không thể tạo Agent",
             )
 
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            provision_account_agent_via_platform,
+            resolve_chatwoot_account_role,
+            set_user_chatwoot_api_token,
+        )
+
+        chatwoot_account_role = resolve_chatwoot_account_role(assigned_omnihub_role_name)
         chatwoot_core = {
             "name": new_user.fullname or new_user.username,
             "email": new_user.email,
-            "role": "agent",
+            "role": chatwoot_account_role,
         }
         chatwoot_payload = _merge_chatwoot_agent_payload(
             meta_data=new_user.meta_data if isinstance(new_user.meta_data, dict) else None,
             core=chatwoot_core,
         )
+        # OmniHub role thắng meta_data.role nếu có (tránh agent cứng trong snapshot).
+        chatwoot_payload["role"] = chatwoot_account_role
         _ensure_agent_payload_for_chatwoot(chatwoot_payload, new_user)
-
-        from app.services.v1.handle_chatwoot.user_tokens import (
-            provision_account_agent_via_platform,
-            set_user_chatwoot_api_token,
-        )
 
         # Platform POST user + account_users → access_token (stock Chatwoot, không cần patch).
         provision = await provision_account_agent_via_platform(
@@ -975,7 +982,7 @@ async def create_user(user_data : CreateUserRequest, db: AsyncSession, current_u
                 if chatwoot_payload.get("display_name")
                 else None
             ),
-            role=str(chatwoot_payload.get("role") or "agent"),
+            role=chatwoot_account_role,
             availability=(
                 str(chatwoot_payload["availability"])
                 if chatwoot_payload.get("availability") is not None
@@ -1320,9 +1327,29 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
             update_data.get("meta_data")
         )
         requested_deactivate = "is_active" in update_data and update_data.get("is_active") == 0
-        sync_agent = (scalar_cw or meta_chatwoot_sync) and not requested_deactivate
+        role_id_changed = (
+            "role_id" in update_data
+            and update_data.get("role_id") is not None
+            and update_data.get("role_id") != user.role_id
+        )
+        sync_agent = (
+            scalar_cw or meta_chatwoot_sync or role_id_changed
+        ) and not requested_deactivate
         chatwoot_merged: dict[str, Any] | None = None
         update_provision_token: str | None = None
+
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            resolve_chatwoot_account_role_for_user,
+        )
+
+        effective_role_id = (
+            update_data["role_id"]
+            if "role_id" in update_data and update_data.get("role_id") is not None
+            else user.role_id
+        )
+        desired_chatwoot_role = await resolve_chatwoot_account_role_for_user(
+            db, user, role_id=effective_role_id
+        )
 
         # Nếu disable user bằng update API thì bắt buộc xóa agent trên messaging trước.
         if requested_deactivate:
@@ -1357,12 +1384,13 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     status_code=ResponseStatusCode.BAD_REQUEST,
                     message="Tenant chưa được map với messaging account, không thể cập nhật Agent",
                 )
-            core_cw: dict[str, Any] = {"role": "agent"}
+            core_cw: dict[str, Any] = {"role": desired_chatwoot_role}
             core_cw.update(chatwoot_payload)
             chatwoot_merged = _merge_chatwoot_agent_payload(
                 meta_data=md_source_agent if isinstance(md_source_agent, dict) else None,
                 core=core_cw,
             )
+            chatwoot_merged["role"] = desired_chatwoot_role
             _ensure_agent_payload_for_chatwoot(chatwoot_merged, user)
             if user_chatwoot_map is None:
                 create_payload = {
@@ -1372,9 +1400,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                     create_payload.get("name") or user.fullname or user.username
                 )
                 create_payload["email"] = create_payload.get("email") or user.email
-                # Giữ role theo payload đã merge từ meta_data (nếu có).
-                # Nếu không có role thì mặc định vẫn là agent.
-                create_payload.setdefault("role", "agent")
+                create_payload["role"] = desired_chatwoot_role
                 if not create_payload.get("email"):
                     return api_response(
                         status=ResponseStatus.ERROR,
@@ -1395,7 +1421,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                         if create_payload.get("display_name")
                         else None
                     ),
-                    role=str(create_payload.get("role") or "agent"),
+                    role=desired_chatwoot_role,
                     availability=(
                         str(create_payload["availability"])
                         if create_payload.get("availability") is not None
@@ -1445,9 +1471,7 @@ async def update_user(user_id: UUID, user_data : UpdateUserRequest, db: AsyncSes
                         create_payload.get("name") or user.fullname or user.username
                     )
                     create_payload["email"] = create_payload.get("email") or user.email
-                    # Giữ role theo payload đã merge từ meta_data (nếu có).
-                    # Nếu không có role thì mặc định vẫn là agent.
-                    create_payload.setdefault("role", "agent")
+                    create_payload["role"] = desired_chatwoot_role
                     if not create_payload.get("email"):
                         return api_response(
                             status=ResponseStatus.ERROR,
@@ -1744,18 +1768,22 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
             "email": user.email,
             "role": "agent",
         }
+        from app.services.v1.handle_chatwoot.user_tokens import (
+            capture_token_into_user_meta,
+            provision_account_agent_via_platform,
+            resolve_chatwoot_account_role_for_user,
+            set_user_chatwoot_api_token,
+            user_has_chatwoot_api_token,
+        )
+
+        desired_chatwoot_role = await resolve_chatwoot_account_role_for_user(db, user)
+        create_core["role"] = desired_chatwoot_role
         create_payload = _merge_chatwoot_agent_payload(
             meta_data=user.meta_data if isinstance(user.meta_data, dict) else None,
             core=create_core,
         )
+        create_payload["role"] = desired_chatwoot_role
         _ensure_agent_payload_for_chatwoot(create_payload, user)
-
-        from app.services.v1.handle_chatwoot.user_tokens import (
-            capture_token_into_user_meta,
-            provision_account_agent_via_platform,
-            set_user_chatwoot_api_token,
-            user_has_chatwoot_api_token,
-        )
 
         provision_token: str | None = None
         if agent_id is None:
@@ -1769,7 +1797,7 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
                     if create_payload.get("display_name")
                     else None
                 ),
-                role=str(create_payload.get("role") or "agent"),
+                role=desired_chatwoot_role,
                 availability=(
                     str(create_payload["availability"])
                     if create_payload.get("availability") is not None
@@ -1815,7 +1843,7 @@ async def sync_user_to_chatwoot_agent(user_id: UUID, db: AsyncSession, current_u
                         if create_payload.get("display_name")
                         else None
                     ),
-                    role=str(create_payload.get("role") or "agent"),
+                    role=desired_chatwoot_role,
                     availability=(
                         str(create_payload["availability"])
                         if create_payload.get("availability") is not None
@@ -2034,6 +2062,171 @@ async def sync_tenant_chatwoot_api_tokens(
             status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
             message=f"Lỗi không xác định: {e}",
         )
+
+
+async def sync_tenant_chatwoot_account_roles(
+    db: AsyncSession,
+    current_user: User,
+    *,
+    tenant_id: UUID | None = None,
+    ensure_tokens: bool = True,
+):
+    """
+    One-shot: map OmniHub role → Chatwoot account role (admin-partner → administrator)
+    + optionally ensure personal API token.
+
+    Chỉ trong đúng 1 tenant (không cross-tenant).
+    """
+    from sqlalchemy.orm import selectinload
+
+    from app.services.v1.handle_chatwoot.user_tokens import (
+        ensure_user_chatwoot_api_token,
+        omnihub_role_is_admin_partner,
+        patch_chatwoot_agent_account_role,
+        resolve_chatwoot_account_role_for_user,
+        resolve_chatwoot_user_id,
+        user_has_chatwoot_api_token,
+    )
+
+    try:
+        is_super = await is_platform_admin(current_user, db)
+        target = tenant_id or current_user.tenant_id
+        if target is None:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.BAD_REQUEST,
+                message="Thiếu tenant_id",
+            )
+        if not is_super and current_user.tenant_id != target:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.FORBIDDEN,
+                message="Bạn chỉ có thể đồng bộ role messaging trong tenant của mình",
+            )
+
+        account_id = await _get_chatwoot_account_id_for_tenant(db, target)
+        if account_id is None:
+            return api_response(
+                status=ResponseStatus.ERROR,
+                status_code=ResponseStatusCode.BAD_REQUEST,
+                message="Tenant chưa được map với messaging account",
+            )
+
+        stmt = (
+            select(User)
+            .options(selectinload(User.role))
+            .where(
+                and_(
+                    User.tenant_id == target,
+                    User.is_active == 1,
+                )
+            )
+        )
+        users = (await db.execute(stmt)).scalars().all()
+
+        updated = 0
+        token_ok = 0
+        skipped_no_map = 0
+        failed: list[dict[str, Any]] = []
+        details: list[dict[str, Any]] = []
+
+        for u in users:
+            desired = await resolve_chatwoot_account_role_for_user(db, u)
+            cw_id = await resolve_chatwoot_user_id(db, u)
+            if cw_id is None:
+                skipped_no_map += 1
+                details.append(
+                    {
+                        "user_id": str(u.id),
+                        "username": u.username,
+                        "status": "skipped_no_map",
+                        "desired_role": desired,
+                    }
+                )
+                continue
+
+            ok, status_code, payload = await patch_chatwoot_agent_account_role(
+                account_id=int(account_id),
+                chatwoot_user_id=int(cw_id),
+                role=desired,
+            )
+            if not ok:
+                failed.append(
+                    {
+                        "user_id": str(u.id),
+                        "username": u.username,
+                        "desired_role": desired,
+                        "status_code": status_code,
+                        "response": payload,
+                    }
+                )
+                continue
+
+            updated += 1
+            has_token = user_has_chatwoot_api_token(u)
+            if ensure_tokens and not has_token:
+                tok = await ensure_user_chatwoot_api_token(db, u)
+                has_token = bool(tok)
+            if has_token:
+                token_ok += 1
+
+            md = dict(u.meta_data) if isinstance(u.meta_data, dict) else {}
+            agent_snap = md.get("chatwoot_agent")
+            if not isinstance(agent_snap, dict):
+                agent_snap = {}
+            agent_snap = {**agent_snap, "role": desired}
+            md["chatwoot_agent"] = agent_snap
+            u.meta_data = md
+            flag_modified(u, "meta_data")
+
+            details.append(
+                {
+                    "user_id": str(u.id),
+                    "username": u.username,
+                    "omnihub_role": (u.role.name if u.role else None),
+                    "chatwoot_role": desired,
+                    "is_admin_partner": omnihub_role_is_admin_partner(
+                        u.role.name if u.role else None
+                    ),
+                    "has_personal_token": has_token,
+                    "status": "ok",
+                }
+            )
+
+        await db.commit()
+        return api_response(
+            status=ResponseStatus.SUCCESS,
+            status_code=ResponseStatusCode.OK,
+            message=(
+                f"Đồng bộ Chatwoot account role: {updated} user "
+                f"(token OK={token_ok}, chưa map={skipped_no_map}, lỗi={len(failed)})"
+            ),
+            data={
+                "tenant_id": str(target),
+                "account_id": int(account_id),
+                "updated": updated,
+                "token_ok": token_ok,
+                "skipped_no_map": skipped_no_map,
+                "failed_count": len(failed),
+                "failed": failed[:50],
+                "users": details,
+            },
+        )
+    except SQLAlchemyError:
+        await db.rollback()
+        return api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            message="Lỗi khi truy vấn cơ sở dữ liệu",
+        )
+    except Exception as e:
+        await db.rollback()
+        return api_response(
+            status=ResponseStatus.ERROR,
+            status_code=ResponseStatusCode.INTERNAL_SERVER_ERROR,
+            message=f"Lỗi không xác định: {e}",
+        )
+
 
 # async def get_user_groups(user_id, page, page_size, search, sort_by, sort_order, db, current_user):
 #     try:

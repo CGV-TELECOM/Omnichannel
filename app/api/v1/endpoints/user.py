@@ -159,6 +159,32 @@ async def sync_tenant_chatwoot_api_tokens(
     )
 
 
+@router.post("/sync-chatwoot-account-roles")
+@log_user_action("sync_chatwoot_account_roles")
+async def sync_tenant_chatwoot_account_roles(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(has_permission("edit_users")),
+    current_user: User = Depends(get_current_user_dependency),
+    tenant_id: Optional[UUID] = Query(
+        None, description="Tenant đích (mặc định = tenant của bạn)"
+    ),
+    ensure_tokens: bool = Query(
+        True, description="True = ensure personal Chatwoot API token nếu chưa có"
+    ),
+):
+    """
+    One-shot: admin-partner → Chatwoot administrator; user → agent;
+    + ensure personal token (không phụ thuộc env admin cho UI partner).
+    """
+    return await handle_user.sync_tenant_chatwoot_account_roles(
+        db,
+        current_user,
+        tenant_id=tenant_id,
+        ensure_tokens=ensure_tokens,
+    )
+
+
 # @router.get("/{user_id}/groups")
 # async def get_user_groups(
 #     user_id: int,

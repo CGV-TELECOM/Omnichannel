@@ -1,0 +1,22 @@
+---
+description: OmniHub role ↔ Chatwoot account role when provisioning messaging users
+globs: app/services/v1/handle_user.py,app/services/v1/handle_chatwoot/user_tokens.py,app/services/v1/handle_chatwoot/agents.py,app/seeds/rbac.py
+alwaysApply: false
+---
+
+# Messaging role provisioning
+
+Canonical plan: `docs/messaging_role_provisioning_plan.md`.
+
+When creating or syncing a Chatwoot account user from OmniHub:
+
+- **admin-partner** (and aliases) → Chatwoot account role **`administrator`**
+- **user** / agent / other tenant staff → Chatwoot **`agent`**
+- Do **not** hardcode `role: "agent"` for every provision
+
+Token policy (target):
+
+- Day-to-day UI for partner and agents: **personal** `chatwoot_api_access_token`
+- `CHATWOOT_USER_API_TOKEN` only for platform ops, webhooks/jobs, or controlled bootstrap — not for partner audit identity
+
+Do not treat “elevated messaging admin” as “must use env admin token”; full-tenant access should come from Chatwoot **administrator** + personal token after migration.

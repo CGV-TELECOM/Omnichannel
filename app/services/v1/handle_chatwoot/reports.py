@@ -11,8 +11,8 @@ Endpoint gốc phía Chatwoot:
 - GET /api/v1/accounts/{id}/csat_survey_responses(/metrics)   — CSAT
 
 Phạm vi:
-- admin-partner / platform / level cao nhất tenant: full account tenant
-- agent thường: chỉ metric cá nhân (type=agent) + inbox mình là member
+- admin-partner / platform: full account tenant (partner dùng token cá nhân khi đã là Chatwoot administrator)
+- agent thường: chỉ metric cá nhân (type=agent) + inbox mình là member (Reports API gọi bằng env admin + OmniHub clamp)
 """
 from __future__ import annotations
 
