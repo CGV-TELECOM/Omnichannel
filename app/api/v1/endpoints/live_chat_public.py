@@ -42,6 +42,18 @@ class LiveChatPersonaSelectBody(BaseModel):
     )
 
 
+class LiveChatContactBody(BaseModel):
+    client_session_id: str = Field(
+        ...,
+        min_length=8,
+        max_length=128,
+        description="Cùng id dùng cho $chatwoot.setUser (oh_…)",
+    )
+    name: Optional[str] = Field(default=None, max_length=120)
+    email: Optional[str] = Field(default=None, max_length=255)
+    phone: Optional[str] = Field(default=None, max_length=20)
+
+
 async def _rate_limit(request: Request):
     client = request.client.host if request.client else "unknown"
     key = f"rate:public_live_chat:{client}"
@@ -103,4 +115,28 @@ async def select_live_chat_persona(
         client_session_id=body.client_session_id,
         meta=body.meta,
         client_ip=client_ip,
+    )
+
+
+@router.post("/{website_token}/contact")
+async def submit_live_chat_contact(
+    website_token: str,
+    body: LiveChatContactBody,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Gửi name/email/phone trước khi mở widget (overlay).
+    Redis + setUser(client_session_id) → webhook PATCH Contact.
+    """
+    limited = await _rate_limit(request)
+    if limited is not None:
+        return limited
+    return await handle_live_chat_public.submit_public_contact(
+        db,
+        website_token,
+        client_session_id=body.client_session_id,
+        name=body.name,
+        email=body.email,
+        phone=body.phone,
     )

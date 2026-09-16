@@ -16,6 +16,7 @@ from app.schemas.requests.chatwoot import (
     ChatwootConversationToggleStatusBody,
     ChatwootConversationTypingBody,
     ConversationFilterRequest,
+    LivechatContactUpsertBody,
 )
 from app.services.v1 import handle_chatwoot
 
@@ -36,6 +37,7 @@ async def list_tenant_inboxes(
 @router.post("/tenants/{tenant_id}/inboxes/sync-bindings")
 @log_user_action("syncMessagingInboxBindings")
 async def sync_tenant_inbox_bindings(
+    request: Request,
     tenant_id: UUID,
     _=Depends(has_permission("view_messaging_inboxes")),
     db: AsyncSession = Depends(get_db),
@@ -85,6 +87,22 @@ async def update_tenant_inbox(
 ):
     return await handle_chatwoot.update_inbox(
         request, current_user, tenant_id, inbox_id, body, db
+    )
+
+
+@router.post("/tenants/{tenant_id}/contacts/upsert")
+@log_user_action("chatwootUpsertLivechatContact")
+async def upsert_tenant_livechat_contact(
+    request: Request,
+    tenant_id: UUID,
+    body: LivechatContactUpsertBody,
+    _=Depends(has_permission("edit_messaging_conversation")),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user_dependency),
+):
+    """Cập nhật name/email/phone Contact messaging (bot / agent / overlay sync)."""
+    return await handle_chatwoot.upsert_livechat_contact(
+        current_user, tenant_id, body, db
     )
 
 
@@ -366,6 +384,7 @@ async def assign_tenant_conversation(
 @router.post("/tenants/{tenant_id}/conversations/{conversation_id}/assign-bot")
 @log_user_action("chatwootAssignConversationToAiBot")
 async def assign_tenant_conversation_to_ai_bot(
+    request: Request,
     tenant_id: UUID,
     conversation_id: int,
     _=Depends(has_permission("assign_messaging_conversation")),

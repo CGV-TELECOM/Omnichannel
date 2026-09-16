@@ -289,6 +289,8 @@ class MessagingInboxBinding(Base):
     website_token = Column(String(128), nullable=False)
     inbox_name = Column(String(255), nullable=True)
     channel_type = Column(String(64), nullable=True)
+    # OmniHub contact policy (mode/fields) — nguồn sự thật; CW chỉ mirror pre_chat
+    contact_capture = Column(JSONB, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
     created_at = Column(
         TIMESTAMP(timezone=True),

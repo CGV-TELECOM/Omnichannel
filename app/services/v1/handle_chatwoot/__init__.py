@@ -62,7 +62,8 @@ from app.services.v1.handle_chatwoot.conversations import (
     update_conversation_custom_attributes,
     update_inbox,
     get_attachment,
-    update_last_seen
+    update_last_seen,
+    upsert_livechat_contact,
 )
 from app.services.v1.handle_chatwoot.teams import (
     list_teams,
@@ -160,6 +161,7 @@ __all__ = [
     "update_conversation",
     "update_conversation_custom_attributes",
     "update_inbox",
+    "upsert_livechat_contact",
     "update_user",
     "get_attachment",
     "bulk_action_account",

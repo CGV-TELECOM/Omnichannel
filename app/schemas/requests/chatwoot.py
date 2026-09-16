@@ -386,3 +386,25 @@ class ChatwootTeamMembersBody(BaseModel):
     user_ids: list[UUID] = Field(
         description="List of local agent/user UUIDs to add/remove/update in the team"
     )
+
+
+class LivechatContactUpsertBody(BaseModel):
+    """PATCH Contact messaging — name/email/phone (hết “Khách truy cập”)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    contact_id: int | None = Field(
+        default=None, description="Chatwoot contact id (ưu tiên nếu có)"
+    )
+    conversation_id: int | None = Field(
+        default=None,
+        description="Nếu không có contact_id — resolve contact từ hội thoại",
+    )
+    name: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=20)
+    source: str | None = Field(
+        default="agent_manual",
+        max_length=64,
+        description="pre_chat | overlay | bot | agent_manual",
+    )

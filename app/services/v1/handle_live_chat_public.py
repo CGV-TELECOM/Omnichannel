@@ -219,6 +219,29 @@ async def get_public_personas_by_website_token(
         "client_session_ttl_seconds": ttl,
         "personas": [_persona_public(p) for p in personas] if mode != "off" else [],
     }
+    # Contact capture policy (pre-chat / overlay) — để FE hiện form trước chat
+    try:
+        from app.services.v1.handle_chatwoot.contact_capture import (
+            fetch_contact_capture_for_binding,
+        )
+
+        payload["contact_capture"] = await fetch_contact_capture_for_binding(
+            messaging_account_id=int(binding.messaging_account_id),
+            inbox_id=int(binding.inbox_id),
+            website_token=website_token,
+            db=db,
+            tenant_id=binding.tenant_id,
+        )
+    except Exception:
+        logger.exception(
+            "Không lấy được contact_capture cho website_token=%s", website_token
+        )
+        payload["contact_capture"] = {
+            "enabled": False,
+            "mode": "off",
+            "message": "",
+            "fields": [],
+        }
     return api_response(
         ResponseStatus.SUCCESS,
         ResponseStatusCode.OK,
@@ -605,3 +628,104 @@ async def _consume_redis_json(
             "Redis DELETE persona key thất bại (vẫn dùng payload) key=%s", key
         )
     return data
+
+
+async def submit_public_contact(
+    db: AsyncSession,
+    website_token: str,
+    *,
+    client_session_id: str | None,
+    name: str | None = None,
+    email: str | None = None,
+    phone: str | None = None,
+) -> dict[str, Any]:
+    """
+    Overlay / host site gửi thông tin liên hệ trước khi mở widget.
+    Lưu Redis theo client_session_id (= setUser identifier) → webhook PATCH contact.
+    """
+    from app.services.v1.handle_chatwoot.contact_capture import (
+        fetch_contact_capture_for_binding,
+        normalize_contact_payload,
+        parse_contact_capture_policy,
+        store_pending_contact,
+    )
+
+    binding = await get_binding_by_website_token(db, website_token)
+    if binding is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.NOT_FOUND,
+            "Không tìm thấy live chat theo website_token.",
+        )
+
+    tenant = await db.get(Tenant, binding.tenant_id)
+    if tenant is None or tenant.is_active == 0:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.NOT_FOUND,
+            "Tenant không tồn tại hoặc đã tắt",
+        )
+
+    session_id = canonicalize_client_session_id(client_session_id)
+    if session_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.BAD_REQUEST,
+            "client_session_id không hợp lệ. Dùng đúng id sẽ truyền cho $chatwoot.setUser.",
+        )
+
+    policy_raw = await fetch_contact_capture_for_binding(
+        messaging_account_id=int(binding.messaging_account_id),
+        inbox_id=int(binding.inbox_id),
+        website_token=website_token,
+        db=db,
+        tenant_id=binding.tenant_id,
+    )
+    policy = parse_contact_capture_policy(policy_raw)
+    # Overlay vẫn nhận khi mode pre_chat_or_bot / bot / pre_chat (pre_chat native
+    # không bắt buộc qua API này, nhưng cho phép host/overlay).
+    cleaned, errors = normalize_contact_payload(
+        {"name": name, "email": email, "phone": phone},
+        policy=policy if policy.enabled and policy.mode != "off" else None,
+    )
+    if errors:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.BAD_REQUEST,
+            "Thông tin liên hệ không hợp lệ",
+            {"errors": errors, "contact_capture": policy_raw},
+        )
+    if not cleaned:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.BAD_REQUEST,
+            "Cần ít nhất một trong name / email / phone",
+        )
+
+    persisted = await store_pending_contact(
+        website_token=website_token,
+        client_session_id=session_id,
+        tenant_id=tenant.id,
+        inbox_id=int(binding.inbox_id),
+        contact=cleaned,
+        ttl_seconds=_select_ttl(),
+    )
+    return api_response(
+        ResponseStatus.SUCCESS,
+        ResponseStatusCode.OK,
+        (
+            "Đã ghi nhận thông tin liên hệ"
+            if persisted
+            else "Đã nhận thông tin; tạm không lưu Redis — thử lại hoặc dùng pre-chat widget"
+        ),
+        {
+            "persisted": persisted,
+            "client_session_id": session_id,
+            "contact": cleaned,
+            "website_token": website_token,
+            # "hint": (
+            #     "Gọi $chatwoot.setUser(client_session_id, { name, email }) "
+            #     "trước khi mở hội thoại để gắn đúng contact."
+            # ),
+        },
+    )

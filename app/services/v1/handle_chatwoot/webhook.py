@@ -113,6 +113,30 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
                 conv = payload["conversation"]
             conversation_id = conv.get("id") or payload.get("id")
             if conversation_id is not None:
+                # Overlay contact (Redis) → PATCH Contact Chatwoot sớm (hết “Khách truy cập”)
+                try:
+                    from app.services.v1.handle_chatwoot.contact_capture import (
+                        maybe_apply_pending_contact_from_webhook,
+                    )
+
+                    contact_detail = await maybe_apply_pending_contact_from_webhook(
+                        db,
+                        tenant_id=tenant_id,
+                        account_id=account_id_int,
+                        conversation_payload=conv if isinstance(conv, dict) else {},
+                        event_payload=payload if isinstance(payload, dict) else None,
+                    )
+                    logger.info(
+                        "Livechat contact capture conv=%s detail=%s",
+                        conversation_id,
+                        contact_detail,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Livechat contact capture thất bại conv=%s",
+                        conversation_id,
+                    )
+
                 ok, detail = await maybe_auto_assign_ai_bot(
                     db,
                     tenant_id=tenant_id,
@@ -156,6 +180,43 @@ async def handle_webhook(payload: dict[str, Any], db: AsyncSession):
             conversation_id = conversation_payload.get("id") or payload.get(
                 "conversation_id"
             )
+            # Retry overlay contact nếu conversation_created miss identifier
+            try:
+                from app.services.v1.handle_chatwoot.contact_capture import (
+                    maybe_apply_pending_contact_from_webhook,
+                    maybe_upsert_contact_from_conversation_attrs,
+                )
+
+                retry_detail = await maybe_apply_pending_contact_from_webhook(
+                    db,
+                    tenant_id=tenant_id,
+                    account_id=account_id_int,
+                    conversation_payload=conversation_payload,
+                    event_payload=payload if isinstance(payload, dict) else None,
+                )
+                if retry_detail.startswith("contact_"):
+                    logger.info(
+                        "Livechat contact capture (message) conv=%s detail=%s",
+                        conversation_id,
+                        retry_detail,
+                    )
+                attrs_detail = await maybe_upsert_contact_from_conversation_attrs(
+                    account_id=account_id_int,
+                    conversation_payload=conversation_payload,
+                    event_payload=payload if isinstance(payload, dict) else None,
+                )
+                if attrs_detail.startswith("contact_"):
+                    logger.info(
+                        "Livechat contact attrs sync conv=%s detail=%s",
+                        conversation_id,
+                        attrs_detail,
+                    )
+            except Exception:
+                logger.exception(
+                    "Livechat contact sync trên message_created thất bại conv=%s",
+                    conversation_id,
+                )
+
             # input_select: ưu tiên submitted_values[].value (opaque persona row id)
             message_content = extract_persona_choice_text(payload)
             message_id = payload.get("id")

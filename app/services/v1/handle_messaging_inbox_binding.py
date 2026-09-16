@@ -249,3 +249,49 @@ async def get_binding_by_tenant_inbox(
         )
     )
     return q.scalar_one_or_none()
+
+
+async def persist_binding_contact_capture(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    inbox_id: int | None = None,
+    website_token: str | None = None,
+    contact_capture: dict[str, Any],
+) -> bool:
+    """
+    Lưu policy OmniHub lên messaging_inbox_bindings.contact_capture (JSONB).
+    Nguồn sự thật cho mode=bot / labels — không phụ thuộc Redis/Chatwoot meta.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    if not isinstance(contact_capture, dict):
+        return False
+
+    binding: MessagingInboxBinding | None = None
+    if inbox_id is not None:
+        binding = await get_binding_by_tenant_inbox(db, tenant_id, int(inbox_id))
+    if binding is None and website_token:
+        binding = await get_binding_by_website_token(db, website_token)
+    if binding is None:
+        logger.warning(
+            "persist contact_capture: không tìm thấy binding tenant=%s inbox=%s",
+            tenant_id,
+            inbox_id,
+        )
+        return False
+
+    binding.contact_capture = contact_capture
+    flag_modified(binding, "contact_capture")
+    binding.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return True
+
+
+def contact_capture_from_binding(
+    binding: MessagingInboxBinding | None,
+) -> dict[str, Any] | None:
+    if binding is None:
+        return None
+    raw = binding.contact_capture
+    return raw if isinstance(raw, dict) else None

@@ -706,8 +706,16 @@ async def create_inbox(
     db: AsyncSession,
 ):
     """POST /api/v1/accounts/{account_id}/inboxes — inboxCreation."""
+    from app.services.v1.handle_chatwoot.contact_capture import (
+        apply_contact_capture_to_inbox_payload,
+        enrich_inbox_api_result,
+    )
+
     payload = body.model_dump(mode="json", exclude_none=True)
-    return await _tenant_application_forward(
+    raw_capture = payload.get("contact_capture")
+    # contact_capture → channel.pre_chat_*; hoist widget fields top-level → channel
+    payload = apply_contact_capture_to_inbox_payload(payload)
+    result = await _tenant_application_forward(
         current_user,
         tenant_id,
         db,
@@ -723,6 +731,14 @@ async def create_inbox(
         error_payload_keys=sorted(payload.keys(), key=str),
         agent_scoped=True,
     )
+    result = enrich_inbox_api_result(result)
+    await _persist_and_overlay_contact_capture(
+        db,
+        tenant_id=tenant_id,
+        result=result,
+        raw_capture=raw_capture,
+    )
+    return result
 
 
 async def get_inbox(
@@ -733,7 +749,9 @@ async def get_inbox(
     db: AsyncSession,
 ):
     """GET /api/v1/accounts/{account_id}/inboxes/{id}."""
-    return await _tenant_application_forward(
+    from app.services.v1.handle_chatwoot.contact_capture import enrich_inbox_api_result
+
+    result = await _tenant_application_forward(
         current_user,
         tenant_id,
         db,
@@ -746,6 +764,11 @@ async def get_inbox(
         error_message="Không lấy được inbox từ messaging",
         agent_scoped=True,
     )
+    result = enrich_inbox_api_result(result)
+    await _overlay_stored_contact_capture(
+        db, tenant_id=tenant_id, inbox_id=inbox_id, result=result
+    )
+    return result
 
 
 async def update_inbox(
@@ -757,8 +780,16 @@ async def update_inbox(
     db: AsyncSession,
 ):
     """PATCH /api/v1/accounts/{account_id}/inboxes/{id}."""
+    from app.services.v1.handle_chatwoot.contact_capture import (
+        apply_contact_capture_to_inbox_payload,
+        enrich_inbox_api_result,
+    )
+
     payload = body.model_dump(mode="json", exclude_unset=True, exclude_none=True)
-    return await _tenant_application_forward(
+    raw_capture = payload.get("contact_capture")
+    # contact_capture → channel.pre_chat_*; hoist widget fields top-level → channel
+    payload = apply_contact_capture_to_inbox_payload(payload)
+    result = await _tenant_application_forward(
         current_user,
         tenant_id,
         db,
@@ -772,6 +803,291 @@ async def update_inbox(
         error_message="Cập nhật inbox trên messaging thất bại",
         error_payload_keys=sorted(payload.keys(), key=str),
         agent_scoped=True,
+    )
+    result = enrich_inbox_api_result(result)
+    await _persist_and_overlay_contact_capture(
+        db,
+        tenant_id=tenant_id,
+        result=result,
+        raw_capture=raw_capture,
+        inbox_id=inbox_id,
+    )
+    return result
+
+
+def _inbox_obj_from_result(result: Any) -> dict[str, Any] | None:
+    if not isinstance(result, dict) or result.get("status") != "success":
+        return None
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    messaging = data.get("messaging") if isinstance(data, dict) else None
+    inbox_obj = (
+        messaging.get("payload")
+        if isinstance(messaging, dict) and isinstance(messaging.get("payload"), dict)
+        else messaging
+    )
+    return inbox_obj if isinstance(inbox_obj, dict) else None
+
+
+def _website_token_from_inbox_obj(inbox_obj: dict[str, Any]) -> str | None:
+    if inbox_obj.get("website_token"):
+        return str(inbox_obj["website_token"]).strip()
+    channel = inbox_obj.get("channel")
+    if isinstance(channel, dict):
+        tok = channel.get("website_token") or channel.get("token")
+        if tok:
+            return str(tok).strip()
+    return None
+
+
+async def _persist_and_overlay_contact_capture(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    result: Any,
+    raw_capture: Any,
+    inbox_id: int | None = None,
+) -> None:
+    """
+    Sau PATCH/POST thành công:
+      - Persist policy vào DB binding (nếu FE gửi contact_capture)
+      - Redis cache best-effort
+      - Overlay response từ DB (ưu tiên) / raw_capture
+    """
+    from app.services.v1.handle_chatwoot.contact_capture import (
+        cache_contact_capture_policy,
+        contact_capture_from_inbox_payload,
+        parse_contact_capture_policy,
+        policy_to_public_dict,
+    )
+    from app.services.v1.handle_messaging_inbox_binding import (
+        persist_binding_contact_capture,
+    )
+
+    inbox_obj = _inbox_obj_from_result(result)
+    if inbox_obj is None:
+        return
+
+    website_token = _website_token_from_inbox_obj(inbox_obj)
+    resolved_inbox_id = inbox_id
+    if resolved_inbox_id is None and inbox_obj.get("id") is not None:
+        try:
+            resolved_inbox_id = int(inbox_obj["id"])
+        except (TypeError, ValueError):
+            resolved_inbox_id = None
+
+    policy: dict[str, Any] | None = None
+    if raw_capture is not None:
+        policy = policy_to_public_dict(parse_contact_capture_policy(raw_capture))
+        if resolved_inbox_id is not None:
+            try:
+                await persist_binding_contact_capture(
+                    db,
+                    tenant_id=tenant_id,
+                    inbox_id=resolved_inbox_id,
+                    website_token=website_token,
+                    contact_capture=policy,
+                )
+            except Exception:
+                logger.exception(
+                    "Persist contact_capture DB thất bại tenant=%s inbox=%s",
+                    tenant_id,
+                    resolved_inbox_id,
+                )
+        await cache_contact_capture_policy(website_token=website_token, policy=policy)
+    else:
+        # Không gửi capture → overlay từ DB nếu có
+        await _overlay_stored_contact_capture(
+            db,
+            tenant_id=tenant_id,
+            inbox_id=resolved_inbox_id,
+            result=result,
+        )
+        return
+
+    # Overlay response với policy vừa lưu (không derive lệch từ CW)
+    inbox_obj["contact_capture"] = policy
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    messaging = data.get("messaging") if isinstance(data, dict) else None
+    if messaging is not inbox_obj and isinstance(messaging, dict):
+        messaging["contact_capture"] = policy
+
+
+async def _overlay_stored_contact_capture(
+    db: AsyncSession,
+    *,
+    tenant_id: UUID,
+    result: Any,
+    inbox_id: int | None = None,
+) -> None:
+    """Ưu tiên DB binding.contact_capture → Redis → giữ derive từ enrich."""
+    from app.services.v1.handle_chatwoot.contact_capture import (
+        get_cached_contact_capture_policy,
+        parse_contact_capture_policy,
+        policy_to_public_dict,
+    )
+    from app.services.v1.handle_messaging_inbox_binding import (
+        contact_capture_from_binding,
+        get_binding_by_tenant_inbox,
+        get_binding_by_website_token,
+    )
+
+    inbox_obj = _inbox_obj_from_result(result)
+    if inbox_obj is None:
+        return
+
+    website_token = _website_token_from_inbox_obj(inbox_obj)
+    resolved_inbox_id = inbox_id
+    if resolved_inbox_id is None and inbox_obj.get("id") is not None:
+        try:
+            resolved_inbox_id = int(inbox_obj["id"])
+        except (TypeError, ValueError):
+            resolved_inbox_id = None
+
+    stored: dict[str, Any] | None = None
+    try:
+        binding = None
+        if resolved_inbox_id is not None:
+            binding = await get_binding_by_tenant_inbox(
+                db, tenant_id, int(resolved_inbox_id)
+            )
+        if binding is None and website_token:
+            binding = await get_binding_by_website_token(db, website_token)
+        stored = contact_capture_from_binding(binding)
+    except Exception:
+        logger.exception("Overlay contact_capture từ DB thất bại")
+
+    if stored is None:
+        stored = await get_cached_contact_capture_policy(website_token)
+    if stored is None:
+        return
+
+    public = policy_to_public_dict(parse_contact_capture_policy(stored))
+    inbox_obj["contact_capture"] = public
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    messaging = data.get("messaging") if isinstance(data, dict) else None
+    if messaging is not inbox_obj and isinstance(messaging, dict):
+        messaging["contact_capture"] = public
+
+
+async def upsert_livechat_contact(
+    current_user: User,
+    tenant_id: UUID,
+    body: Any,
+    db: AsyncSession,
+):
+    """
+    PATCH Contact Chatwoot (name/email/phone) — hết “Khách truy cập”.
+    Body: contact_id? | conversation_id?, name?, email?, phone?, source?
+    """
+    from app.services.v1.handle_chatwoot.contact_capture import (
+        normalize_contact_payload,
+        resolve_contact_id_for_conversation,
+        upsert_chatwoot_contact,
+    )
+    from app.services.v1.handle_chatwoot.user_tokens import (
+        resolve_agent_scoped_access_token,
+    )
+
+    denied = await _require_tenant_access(current_user, tenant_id, db)
+    if denied is not None:
+        return denied
+
+    payload = body.model_dump(mode="json", exclude_unset=True) if hasattr(body, "model_dump") else dict(body or {})
+    cleaned, errors = normalize_contact_payload(payload)
+    if errors:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.BAD_REQUEST,
+            "Thông tin liên hệ không hợp lệ",
+            {"errors": errors},
+        )
+    if not cleaned:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.BAD_REQUEST,
+            "Cần ít nhất một trong name / email / phone",
+        )
+
+    account_id, _ = await _resolve_account_id(db, tenant_id)
+    if account_id is None:
+        return api_response(
+            ResponseStatus.ERROR,
+            ResponseStatusCode.NOT_FOUND,
+            "Doanh nghiệp chưa được liên kết kênh trò chuyện.",
+        )
+
+    token, tok_err = await resolve_agent_scoped_access_token(db, current_user)
+    if tok_err is not None:
+        return tok_err
+
+    contact_id = payload.get("contact_id")
+    try:
+        contact_id_int = int(contact_id) if contact_id is not None else None
+    except (TypeError, ValueError):
+        contact_id_int = None
+
+    if contact_id_int is None:
+        conv_id = payload.get("conversation_id")
+        try:
+            conv_id_int = int(conv_id) if conv_id is not None else None
+        except (TypeError, ValueError):
+            conv_id_int = None
+        if conv_id_int is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.BAD_REQUEST,
+                "Cần contact_id hoặc conversation_id",
+            )
+        contact_id_int = await resolve_contact_id_for_conversation(
+            account_id=int(account_id),
+            conversation_id=conv_id_int,
+            access_token=token,
+        )
+        if contact_id_int is None:
+            return api_response(
+                ResponseStatus.ERROR,
+                ResponseStatusCode.NOT_FOUND,
+                "Không tìm thấy contact của hội thoại",
+            )
+
+    source = str(payload.get("source") or "agent_manual").strip()[:64] or "agent_manual"
+    ok, status, data = await upsert_chatwoot_contact(
+        account_id=int(account_id),
+        contact_id=int(contact_id_int),
+        name=cleaned.get("name"),
+        email=cleaned.get("email"),
+        phone=cleaned.get("phone"),
+        additional_attributes={
+            "omnihub_contact_capture": True,
+            "omnihub_contact_source": source,
+        },
+        access_token=token,
+    )
+    if not ok:
+        code = (
+            ResponseStatusCode.SERVICE_UNAVAILABLE
+            if status >= 500
+            else ResponseStatusCode.BAD_REQUEST
+        )
+        if status in (401, 403, 404):
+            code = ResponseStatusCode(status)
+        return api_response(
+            ResponseStatus.ERROR,
+            code,
+            "Cập nhật contact messaging thất bại",
+            {"messaging_http_status": status, "messaging": data},
+        )
+    return api_response(
+        ResponseStatus.SUCCESS,
+        ResponseStatusCode.OK,
+        "Đã cập nhật thông tin liên hệ trên messaging",
+        {
+            "tenant_id": str(tenant_id),
+            "contact_id": int(contact_id_int),
+            "contact": cleaned,
+            "source": source,
+            "messaging": data,
+        },
     )
 
 
